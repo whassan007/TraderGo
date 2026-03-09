@@ -15,6 +15,12 @@ const ChartEngine = (() => {
     let forecastSeries = {};
     let monteCarloSeries = [];
 
+    // S&R series & DOM overlay
+    let srPriceLines = [];
+    let srAreaSeries = [];
+    let srBreakoutMarkers = [];
+    let srOverlayEl = null;
+
     // Active indicators
     let activeIndicators = new Set();
 
@@ -129,6 +135,9 @@ const ChartEngine = (() => {
         // Refresh indicators
         _refreshIndicators(candles);
 
+        // Refresh S&R
+        if (activeIndicators.has('sr')) _refreshSR(ticker, candles);
+
         // Refresh forecasts
         _refreshForecasts(ticker);
 
@@ -167,6 +176,15 @@ const ChartEngine = (() => {
         }
         const candles = MarketData.getOHLCV(currentTicker, currentTimeframe);
         _refreshIndicators(candles);
+
+        // S&R toggle
+        if (name === 'sr') {
+            if (activeIndicators.has('sr')) {
+                _refreshSR(currentTicker, candles);
+            } else {
+                _clearSR();
+            }
+        }
     }
 
     function _removeIndicator(name) {
@@ -385,6 +403,179 @@ const ChartEngine = (() => {
                 monteCarloSeries.push(s);
             }
         }
+    }
+
+    // ═══════════════════════════════════════════════════════════════════
+    //  S&R RENDERING ENGINE
+    // ═══════════════════════════════════════════════════════════════════
+
+    function _clearSR() {
+        // Remove price lines from candle series
+        srPriceLines.forEach(pl => {
+            try { candleSeries.removePriceLine(pl); } catch (e) { }
+        });
+        srPriceLines = [];
+
+        // Remove area series (consolidation range shading)
+        srAreaSeries.forEach(s => {
+            try { chart.removeSeries(s); } catch (e) { }
+        });
+        srAreaSeries = [];
+
+        // Remove breakout markers
+        srBreakoutMarkers = [];
+
+        // Remove overlay
+        if (srOverlayEl) {
+            srOverlayEl.remove();
+            srOverlayEl = null;
+        }
+    }
+
+    function _refreshSR(ticker, candles) {
+        _clearSR();
+        if (!candles || candles.length < 10) return;
+
+        const sr = Indicators.advancedSR(ticker, candles, currentTimeframe);
+        if (!sr) return;
+
+        const firstTime = candles[0].time;
+        const lastTime = candles[candles.length - 1].time;
+
+        // ── Draw S&R horizontal price lines ─────────────────────────
+        sr.levels.forEach(level => {
+            const info = Indicators.getSRRenderInfo(level);
+            const pl = candleSeries.createPriceLine({
+                price: level.value,
+                color: info.color,
+                lineWidth: info.lineWidth,
+                lineStyle: info.isNew ? 0 : 0,  // solid
+                axisLabelVisible: true,
+                title: `${info.tfLabel} ${info.label}`,
+            });
+            srPriceLines.push(pl);
+        });
+
+        // ── Draw consolidation range shading ─────────────────────────
+        sr.ranges.forEach(range => {
+            // Upper bound (dashed line via a separate thin series)
+            const upperLine = chart.addLineSeries({
+                color: Indicators.SR_COLORS.rangeBorder,
+                lineWidth: 1,
+                lineStyle: 2,  // dashed
+                priceLineVisible: false,
+                lastValueVisible: false,
+                crosshairMarkerVisible: false,
+            });
+            upperLine.setData([
+                { time: firstTime, value: range.upper },
+                { time: lastTime, value: range.upper }
+            ]);
+            srAreaSeries.push(upperLine);
+
+            const lowerLine = chart.addLineSeries({
+                color: Indicators.SR_COLORS.rangeBorder,
+                lineWidth: 1,
+                lineStyle: 2,
+                priceLineVisible: false,
+                lastValueVisible: false,
+                crosshairMarkerVisible: false,
+            });
+            lowerLine.setData([
+                { time: firstTime, value: range.lower },
+                { time: lastTime, value: range.lower }
+            ]);
+            srAreaSeries.push(lowerLine);
+
+            // Shaded fill between upper and lower via two area series
+            // Upper area (fills down to the range midpoint)
+            // We'll use a baselineSeries to shade between levels
+            try {
+                const shadeSeries = chart.addAreaSeries({
+                    topColor: Indicators.SR_COLORS.rangeShade,
+                    bottomColor: 'transparent',
+                    lineColor: 'transparent',
+                    lineWidth: 0,
+                    priceLineVisible: false,
+                    lastValueVisible: false,
+                    crosshairMarkerVisible: false,
+                    priceScaleId: 'right',
+                });
+                // Fill at upper bound (area fills down)
+                shadeSeries.setData([
+                    { time: firstTime, value: range.upper },
+                    { time: lastTime, value: range.upper }
+                ]);
+                srAreaSeries.push(shadeSeries);
+            } catch (e) { /* older LW Charts versions may not support */ }
+        });
+
+        // ── Draw breakout markers ────────────────────────────────────
+        if (sr.breakouts.length > 0) {
+            const markers = sr.breakouts.map(bo => ({
+                time: bo.time,
+                position: bo.direction === 'up' ? 'belowBar' : 'aboveBar',
+                color: bo.direction === 'up'
+                    ? Indicators.SR_COLORS.breakoutUp
+                    : Indicators.SR_COLORS.breakoutDn,
+                shape: bo.direction === 'up' ? 'arrowUp' : 'arrowDown',
+                text: bo.label,
+                size: bo.strength === 'strong' ? 3 : 2
+            }));
+
+            // Merge with any existing markers and sort by time
+            srBreakoutMarkers = markers;
+            try {
+                candleSeries.setMarkers(
+                    markers.sort((a, b) => a.time - b.time)
+                );
+            } catch (e) { }
+        } else {
+            try { candleSeries.setMarkers([]); } catch (e) { }
+        }
+
+        // ── Create info overlay (breakout signals legend) ───────────
+        _createSROverlay(sr);
+    }
+
+    function _createSROverlay(sr) {
+        if (srOverlayEl) srOverlayEl.remove();
+
+        const container = document.getElementById('chart-container');
+        if (!container) return;
+
+        srOverlayEl = document.createElement('div');
+        srOverlayEl.className = 'sr-overlay';
+
+        let html = '<div class="sr-overlay-header">S&R LEVELS</div>';
+
+        sr.levels.forEach(level => {
+            const info = Indicators.getSRRenderInfo(level);
+            const dotStyle = `width:8px;height:8px;border-radius:50%;background:${info.color};flex-shrink:0;`;
+            const isNewClass = info.isNew ? ' sr-new-pulse' : '';
+            html += `<div class="sr-level-row${isNewClass}">
+                <span style="${dotStyle}"></span>
+                <span class="sr-level-label">${info.label}</span>
+                <span class="sr-level-tf">[${info.tfLabel}]</span>
+                <span class="sr-level-touches">${level.touches}×</span>
+            </div>`;
+        });
+
+        if (sr.ranges.length > 0) {
+            sr.ranges.forEach(r => {
+                html += `<div class="sr-range-row">📐 Range: $${r.lower.toFixed(2)} — $${r.upper.toFixed(2)} (${(r.width * 100).toFixed(1)}%)</div>`;
+            });
+        }
+
+        if (sr.breakouts.length > 0) {
+            sr.breakouts.forEach(bo => {
+                const icon = bo.direction === 'up' ? '🟢' : '🔴';
+                html += `<div class="sr-breakout-row">${icon} ${bo.label} @ $${bo.price.toFixed(2)}</div>`;
+            });
+        }
+
+        srOverlayEl.innerHTML = html;
+        container.appendChild(srOverlayEl);
     }
 
     // ── Get state ───────────────────────────────────────────────────

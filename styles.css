@@ -868,3 +868,108 @@ body {
         display: none;
     }
 }
+
+/* ═══════════════════════════════════════════════════════════════════
+   S&R OVERLAY — Chart Floating Legend
+   ═══════════════════════════════════════════════════════════════════ */
+
+.sr-overlay {
+    position: absolute;
+    top: 8px;
+    left: 8px;
+    z-index: 50;
+    background: rgba(10, 14, 23, 0.88);
+    border: 1px solid rgba(56, 189, 248, 0.12);
+    border-radius: 6px;
+    padding: 6px 10px;
+    font-family: var(--font-mono);
+    font-size: 10px;
+    max-width: 260px;
+    backdrop-filter: blur(8px);
+    pointer-events: none;
+}
+
+.sr-overlay-header {
+    font-size: 9px;
+    font-weight: 700;
+    color: var(--text-accent);
+    letter-spacing: 1px;
+    margin-bottom: 4px;
+    padding-bottom: 3px;
+    border-bottom: 1px solid var(--border);
+}
+
+.sr-level-row {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 2px 0;
+    color: var(--text-muted);
+}
+
+.sr-level-label {
+    flex: 1;
+    font-weight: 500;
+    color: var(--text-primary);
+    font-size: 10px;
+}
+
+.sr-level-tf {
+    font-size: 8px;
+    color: var(--text-dim);
+    font-weight: 600;
+}
+
+.sr-level-touches {
+    font-size: 9px;
+    color: var(--text-dim);
+    min-width: 18px;
+    text-align: right;
+}
+
+/* Pulse animation for newly-reversed levels */
+.sr-new-pulse {
+    animation: sr-pulse 1.5s ease-in-out infinite;
+}
+
+@keyframes sr-pulse {
+
+    0%,
+    100% {
+        opacity: 1;
+    }
+
+    50% {
+        opacity: 0.55;
+        background: rgba(56, 189, 248, 0.05);
+    }
+}
+
+.sr-range-row {
+    padding: 3px 0;
+    color: var(--text-muted);
+    font-size: 9px;
+    border-top: 1px solid var(--border);
+    margin-top: 2px;
+}
+
+.sr-breakout-row {
+    padding: 3px 0;
+    font-weight: 700;
+    font-size: 10px;
+    color: var(--text-primary);
+    border-top: 1px solid var(--border);
+    margin-top: 2px;
+}
+
+/* S&R button special active state */
+.ind-btn.sr-btn.active {
+    color: var(--cyan);
+    background: rgba(6, 182, 212, 0.1);
+    border-color: rgba(6, 182, 212, 0.25);
+}
+
+/* Chart container needs position:relative for overlay */
+.chart-container {
+    position: relative;
+}
