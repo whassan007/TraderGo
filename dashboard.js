@@ -1,341 +1,368 @@
 /* ══════════════════════════════════════════════════════════════════
-   DASHBOARD.JS — Core Rendering Engine & Cycle Orchestrator
+   DASHBOARD.JS — TradingView-Style Dashboard Orchestrator
    ══════════════════════════════════════════════════════════════════ */
 
-(() => {
+(function () {
     'use strict';
 
-    // ── Configuration ───────────────────────────────────────────────
-    const CYCLE_INTERVAL_MS = 5 * 60 * 1000; // 5 minutes
-    const BOOT_DURATION_MS = 3200;
-
-    // ── State ───────────────────────────────────────────────────────
     let cycleCount = 0;
-    let countdownSeconds = 300;
+    let countdownSec = 300;
     let countdownInterval = null;
-    let cycleInterval = null;
-    let latestResults = [];
+    let microTickInterval = null;
 
-    // ── DOM References ──────────────────────────────────────────────
     const $ = id => document.getElementById(id);
 
     // ── Boot Sequence ───────────────────────────────────────────────
-    function runBootSequence() {
-        const bootLog = $('boot-log');
-        const progressBar = $('boot-progress-bar');
+    async function runBootSequence() {
+        const overlay = $('boot-overlay');
+        const bar = $('boot-progress-bar');
+        const log = $('boot-log');
 
         const steps = [
-            { msg: '> Initializing TradingAgents container…', cls: 'info', pct: 10 },
-            { msg: '  ✓ LangGraph state graph loaded', cls: 'ok', pct: 18 },
-            { msg: '> Connecting to GKE cluster…', cls: 'info', pct: 25 },
-            { msg: '  ✓ Cloud Run orchestrator online', cls: 'ok', pct: 32 },
-            { msg: '> Loading Qlib factor library…', cls: 'info', pct: 40 },
-            { msg: '  ✓ RD-Agent pipeline initialized (GPU: L4)', cls: 'ok', pct: 48 },
-            { msg: '> Booting FinMem TGI inference endpoint…', cls: 'info', pct: 55 },
-            { msg: '  ✓ Memorystore (Redis) connected', cls: 'ok', pct: 62 },
-            { msg: '  ✓ AlloyDB pgvector ready', cls: 'ok', pct: 68 },
-            { msg: '> Loading portfolio universe (50 assets)…', cls: 'info', pct: 75 },
-            { msg: '  ✓ Market data engine seeded', cls: 'ok', pct: 82 },
-            { msg: '> Arming 4 analysis agents…', cls: 'info', pct: 88 },
-            { msg: '  ✓ Momentum | Reversion | Liquidity | Options', cls: 'ok', pct: 94 },
-            { msg: '> System ready. Starting first cycle…', cls: 'ok', pct: 100 },
+            { msg: '[SYS] Initializing cloud-native trading infrastructure…', pct: 10 },
+            { msg: '[GKE] Connecting to Google Kubernetes Engine cluster…', pct: 20 },
+            { msg: '[DATA] Loading portfolio universe (50 assets)…', pct: 30 },
+            { msg: '[OHLCV] Generating historical candle data…', pct: 40 },
+            { msg: '[CHART] Mounting TradingView Lightweight Charts engine…', pct: 50 },
+            { msg: '[IND] Loading technical analysis library (SMA/RSI/MACD/BB/VWAP)…', pct: 60 },
+            { msg: '[AGENTS] Spawning 5 forecast agents (LSTM/Transformer/Momentum/Vol/Sentiment)…', pct: 70 },
+            { msg: '[MC] Initializing Monte Carlo simulation engine…', pct: 80 },
+            { msg: '[FINMEM] Connecting to FinMem temporal memory store…', pct: 90 },
+            { msg: '[READY] All systems nominal. Launching platform…', pct: 100 },
         ];
 
-        let delay = 0;
-        steps.forEach((step, i) => {
-            delay += 150 + Math.random() * 100;
-            setTimeout(() => {
-                const line = document.createElement('div');
-                line.className = `log-line ${step.cls}`;
-                line.textContent = step.msg;
-                bootLog.appendChild(line);
-                bootLog.scrollTop = bootLog.scrollHeight;
-                progressBar.style.width = step.pct + '%';
-            }, delay);
-        });
+        for (const step of steps) {
+            bar.style.width = step.pct + '%';
+            const line = document.createElement('div');
+            line.textContent = step.msg;
+            log.appendChild(line);
+            log.scrollTop = log.scrollHeight;
+            await _sleep(280);
+        }
 
-        setTimeout(() => {
-            $('boot-overlay').classList.add('hidden');
-            $('terminal-container').classList.add('visible');
-            initDashboard();
-        }, BOOT_DURATION_MS);
+        await _sleep(400);
+
+        // Initialize everything
+        MarketData.init();
+        initDashboard();
+
+        overlay.classList.add('hidden');
+        setTimeout(() => overlay.style.display = 'none', 800);
     }
 
     // ── Initialize Dashboard ────────────────────────────────────────
     function initDashboard() {
-        MarketData.init();
-        OptionsAnalyzer.init();
+        // Mount chart
+        ChartEngine.init('chart-container');
 
+        // Build watchlist
+        buildWatchlist();
+
+        // Wire toolbar events
+        wireToolbar();
+
+        // Run first analysis cycle
+        runAnalysisCycle();
+
+        // Start micro-tick loop (1 second)
+        microTickInterval = setInterval(() => {
+            MarketData.microTick();
+            ChartEngine.updateLive();
+            updateWatchlistPrices();
+            updateToolbarPrice();
+        }, 1000);
+
+        // Start 5-min cycle loop
+        setInterval(runAnalysisCycle, 300_000);
+
+        // Clock
         updateClock();
         setInterval(updateClock, 1000);
 
-        updateMarketHours();
-        setInterval(updateMarketHours, 30000);
-
-        // Run first cycle immediately
-        runAnalysisCycle();
-
-        // Start countdown
+        // Countdown
+        resetCountdown();
         startCountdown();
 
-        // Schedule subsequent cycles
-        cycleInterval = setInterval(() => {
-            runAnalysisCycle();
-            resetCountdown();
-        }, CYCLE_INTERVAL_MS);
+        // Market hours
+        updateMarketHours();
+        setInterval(updateMarketHours, 60_000);
+
+        $('header-status').textContent = 'ACTIVE';
     }
 
-    // ── Analysis Cycle ──────────────────────────────────────────────
+    // ── Analysis Cycle (every 5 min) ────────────────────────────────
     function runAnalysisCycle() {
         cycleCount++;
         $('cycle-number').textContent = cycleCount;
-        $('header-status').textContent = 'ANALYZING';
-        $('status-dot').textContent = '🟡';
 
-        // Simulate analysis delay (1.5s)
-        setTimeout(() => {
-            // Tick market data
-            MarketData.tick();
-            OptionsAnalyzer.tick();
+        // Tick market data (full 5-min step for agents)
+        MarketData.tick();
 
-            // Run agents
-            latestResults = AgentFramework.runCycle();
+        // Run original signal agents
+        const agentResults = AgentFramework.runCycle();
 
-            // Update all panels
-            updateLiquidityPanel();
-            updateSignalsTable();
-            updateOptionsPanel();
-            updateFinMemPanel();
+        // Run forecast agents for selected ticker
+        const selectedTicker = ChartEngine.getCurrentTicker();
+        ForecastAgents.generateForecasts(selectedTicker);
 
-            // Set status back to active
-            $('header-status').textContent = 'ACTIVE';
-            $('status-dot').textContent = '🟢';
-        }, 1500);
+        // Update chart forecasts
+        ChartEngine.refreshForecasts();
+
+        // Update panels
+        updateAgentTable(selectedTicker);
+        updateDisagreementPanel(selectedTicker);
+        updateLiquidityMini();
+        updateOptionsMini();
+        updateFinMemMini(agentResults);
+
+        // Countdown reset
+        resetCountdown();
     }
 
-    // ── Panel Updates ───────────────────────────────────────────────
+    // ── Build Watchlist ─────────────────────────────────────────────
+    function buildWatchlist() {
+        const container = $('watchlist-list');
+        container.innerHTML = '';
 
-    function updateLiquidityPanel() {
-        const score = MarketData.getLiquidityScore();
-        const spread = MarketData.getSpreadStatus();
-        const volRate = MarketData.getVolumeRunRate();
-        const vix = MarketData.getVIX();
-
-        $('liquidity-score').textContent = score.toFixed(1);
-        $('liquidity-bar').style.width = (score * 10) + '%';
-
-        // Color the score
-        const scoreEl = $('liquidity-score');
-        if (score >= 7) scoreEl.style.color = 'var(--green)';
-        else if (score >= 4) scoreEl.style.color = 'var(--yellow)';
-        else scoreEl.style.color = 'var(--red)';
-
-        $('spread-status').textContent = spread;
-        $('spread-status').style.color = spread === 'Tight' ? 'var(--green)' :
-            spread === 'Normal' ? 'var(--yellow)' : 'var(--red)';
-
-        $('volume-runrate').textContent = volRate + ' vs avg';
-        $('volume-runrate').style.color = volRate.startsWith('+') ? 'var(--green)' : 'var(--red)';
-
-        $('vix-level').textContent = vix.toFixed(2);
-        $('vix-level').style.color = vix > 25 ? 'var(--red)' : vix > 18 ? 'var(--yellow)' : 'var(--green)';
-
-        $('macro-flow').textContent = OptionsAnalyzer.getMacroFlowSummary();
-
-        // System impact
-        const impact = score < 4 ? 'High volatility & slippage expected. Reduce position sizes.' :
-            score < 7 ? 'Moderate conditions. Normal execution expected.' :
-                'Excellent liquidity. Low slippage, tight spreads.';
-        $('system-impact').textContent = impact;
-    }
-
-    function updateSignalsTable() {
-        const tbody = $('signals-tbody');
-        const significant = AgentFramework.getSignificantSignals(latestResults);
-
-        // Clear table
-        tbody.innerHTML = '';
-
-        if (significant.length === 0) {
-            tbody.innerHTML = '<tr class="placeholder-row"><td colspan="8">No significant signals this cycle. All assets within normal range.</td></tr>';
-            $('signal-count').textContent = '0 signals';
-            return;
-        }
-
-        significant.forEach((result, i) => {
-            const row = document.createElement('tr');
-            row.className = 'row-enter';
-            row.style.animationDelay = (i * 0.05) + 's';
-
-            const ag1 = result.agents.ag1;
-            const ag2 = result.agents.ag2;
-            const ag3 = result.agents.ag3;
-            const ag4 = result.agents.ag4;
-
-            row.innerHTML = `
-                <td class="ticker-cell">${result.ticker}</td>
-                <td class="${_signalClass(ag1.signal)}">${_signalEmoji(ag1.signal)} ${_signalLabel(ag1.signal)}</td>
-                <td class="${_signalClass(ag2.signal)}">${_signalEmoji(ag2.signal)} ${_signalLabel(ag2.signal)}</td>
-                <td class="${_signalClass(ag3.signal)}">${_signalEmoji(ag3.signal)} ${_signalLabel(ag3.signal)}</td>
-                <td class="${_signalClass(ag4.signal)}">${_signalEmoji(ag4.signal)} ${_signalLabel(ag4.signal)}</td>
-                <td class="${_consensusClass(result.consensus)}">${result.consensus}</td>
-                <td class="${_confClass(result.confidence)}">${result.confidence}%</td>
-                <td>${result.action}</td>
+        MarketData.PORTFOLIO.forEach(ticker => {
+            const item = document.createElement('div');
+            item.className = `wl-item${ticker === 'SPY' ? ' active' : ''}`;
+            item.dataset.ticker = ticker;
+            item.innerHTML = `
+                <span class="wl-ticker">${ticker}</span>
+                <span class="wl-price" id="wl-p-${_cssId(ticker)}">—</span>
+                <span class="wl-change flat" id="wl-c-${_cssId(ticker)}">0.00%</span>
             `;
-
-            tbody.appendChild(row);
+            item.addEventListener('click', () => selectTicker(ticker));
+            container.appendChild(item);
         });
 
-        $('signal-count').textContent = `${significant.length} signal${significant.length !== 1 ? 's' : ''}`;
+        updateWatchlistPrices();
     }
 
-    function updateOptionsPanel() {
-        const list = $('options-list');
-        const events = OptionsAnalyzer.getSpotlightEvents();
+    function updateWatchlistPrices() {
+        MarketData.PORTFOLIO.forEach(ticker => {
+            const price = MarketData.getPrice(ticker);
+            const change = MarketData.getChangePercent(ticker);
+            const pEl = $(`wl-p-${_cssId(ticker)}`);
+            const cEl = $(`wl-c-${_cssId(ticker)}`);
+            if (pEl && price) {
+                pEl.textContent = price < 1 ? price.toFixed(4) : price < 20 ? price.toFixed(2) : price.toFixed(2);
+            }
+            if (cEl) {
+                const sign = change >= 0 ? '+' : '';
+                cEl.textContent = `${sign}${change.toFixed(2)}%`;
+                cEl.className = `wl-change ${change > 0.01 ? 'up' : change < -0.01 ? 'down' : 'flat'}`;
+            }
+        });
+    }
 
-        list.innerHTML = '';
+    function selectTicker(ticker) {
+        // Update active class
+        document.querySelectorAll('.wl-item').forEach(el => el.classList.remove('active'));
+        const target = document.querySelector(`.wl-item[data-ticker="${ticker}"]`);
+        if (target) target.classList.add('active');
 
-        if (events.length === 0) {
-            list.innerHTML = '<li class="options-item placeholder">No notable options activity this cycle.</li>';
+        // Load chart
+        ChartEngine.loadTicker(ticker, ChartEngine.getCurrentTimeframe());
+
+        // Generate & display forecasts
+        ForecastAgents.generateForecasts(ticker);
+        ChartEngine.refreshForecasts();
+        updateAgentTable(ticker);
+        updateDisagreementPanel(ticker);
+        updateToolbarPrice();
+    }
+
+    // ── Toolbar Wiring ──────────────────────────────────────────────
+    function wireToolbar() {
+        // Timeframe buttons
+        document.querySelectorAll('.tf-btn').forEach(btn => {
+            btn.addEventListener('click', () => {
+                document.querySelectorAll('.tf-btn').forEach(b => b.classList.remove('active'));
+                btn.classList.add('active');
+                ChartEngine.setTimeframe(parseInt(btn.dataset.tf));
+            });
+        });
+
+        // Indicator toggles
+        document.querySelectorAll('.ind-btn').forEach(btn => {
+            btn.addEventListener('click', () => {
+                btn.classList.toggle('active');
+                ChartEngine.toggleIndicator(btn.dataset.ind);
+            });
+        });
+
+        // Watchlist search
+        const search = $('wl-search');
+        if (search) {
+            search.addEventListener('input', () => {
+                const q = search.value.toUpperCase();
+                document.querySelectorAll('.wl-item').forEach(item => {
+                    item.style.display = item.dataset.ticker.includes(q) ? '' : 'none';
+                });
+            });
+        }
+    }
+
+    function updateToolbarPrice() {
+        const ticker = ChartEngine.getCurrentTicker();
+        const price = MarketData.getPrice(ticker);
+        const change = MarketData.getChangePercent(ticker);
+        $('toolbar-ticker').textContent = ticker;
+        if (price) $('toolbar-price').textContent = `$${price.toFixed(2)}`;
+        if (change !== undefined) {
+            const el = $('toolbar-change');
+            const sign = change >= 0 ? '+' : '';
+            el.textContent = `${sign}${change.toFixed(2)}%`;
+            el.className = `ticker-change ${change > 0 ? 'up' : change < 0 ? 'down' : ''}`;
+        }
+    }
+
+    // ── Agent Forecast Table ────────────────────────────────────────
+    function updateAgentTable(ticker) {
+        const tbody = $('agent-tbody');
+        const allForecasts = ForecastAgents.getForecasts(ticker);
+        if (!allForecasts || Object.keys(allForecasts).length === 0) {
+            tbody.innerHTML = '<tr><td colspan="4" class="placeholder-cell">Awaiting forecasts…</td></tr>';
             return;
         }
 
-        events.forEach(event => {
-            const li = document.createElement('li');
-            li.className = 'options-item';
-            li.innerHTML = `<span class="ticker-highlight">${event.ticker}:</span> ${event.message}`;
-            list.appendChild(li);
+        let html = '';
+        const agents = [...ForecastAgents.AGENTS, { id: 'ensemble', name: 'Ensemble', color: ForecastAgents.ENSEMBLE_COLOR }];
+
+        agents.forEach(agent => {
+            const f = allForecasts[agent.id];
+            if (!f) return;
+            const isEnsemble = agent.id === 'ensemble';
+            const dirClass = f.direction === 'BULLISH' ? 'bullish' : f.direction === 'BEARISH' ? 'bearish' : 'neutral';
+            const dirIcon = f.direction === 'BULLISH' ? '▲' : f.direction === 'BEARISH' ? '▼' : '—';
+
+            html += `<tr class="${isEnsemble ? 'ensemble-row' : ''}">
+                <td><div class="agent-name-cell">
+                    <span class="agent-dot" style="background:${agent.color}"></span>
+                    <span class="agent-name">${agent.name}</span>
+                </div></td>
+                <td class="agent-price">$${f.predicted_price?.toFixed(2) || '—'}</td>
+                <td class="agent-conf">${(f.confidence_score * 100).toFixed(0)}%</td>
+                <td class="agent-dir ${dirClass}">${dirIcon} ${f.direction?.substring(0, 4) || '—'}</td>
+            </tr>`;
         });
+
+        tbody.innerHTML = html;
     }
 
-    function updateFinMemPanel() {
-        // Memory recall
-        const recalls = AgentFramework.getMemoryRecall();
-        $('memory-recall').textContent = recalls[0];
+    // ── Disagreement Panel ──────────────────────────────────────────
+    function updateDisagreementPanel(ticker) {
+        const d = ForecastAgents.getDisagreement(ticker);
+        $('disagree-score').textContent = d.score.toFixed(2) + '%';
+        const scoreEl = $('disagree-score');
+        scoreEl.style.color = d.score > 0.5 ? 'var(--red)' : d.score > 0.2 ? 'var(--yellow)' : 'var(--green)';
+        scoreEl.style.background = d.score > 0.5 ? 'rgba(239,68,68,0.1)' : d.score > 0.2 ? 'rgba(234,179,8,0.1)' : 'rgba(34,197,94,0.1)';
 
-        // Risk alert
-        const risk = AgentFramework.getRiskAlert(latestResults);
-        const riskEl = $('risk-alert');
-        riskEl.textContent = risk.message;
-        riskEl.className = 'finmem-quote risk-quote';
-        if (risk.level === 'alert') riskEl.classList.add('risk-alert');
-        if (risk.level === 'warning') riskEl.classList.add('risk-alert');
+        const grid = $('heatmap-grid');
+        let html = '';
+        const entries = Object.entries(d.details || {});
+        entries.forEach(([key, val]) => {
+            const cls = val > 0.5 ? 'high' : val > 0.2 ? 'mid' : 'low';
+            html += `<div class="heatmap-cell ${cls}" title="${key}">${key.replace(' vs ', '\n')}\n${val.toFixed(2)}%</div>`;
+        });
+        grid.innerHTML = html || '<div class="heatmap-cell" style="grid-column:1/-1;color:var(--text-dim)">No data yet</div>';
+    }
 
-        // Anomaly badge
-        const badge = $('anomaly-badge');
-        badge.textContent = risk.level === 'nominal' ? 'NOMINAL' :
-            risk.level === 'warning' ? 'WARNING' : 'ALERT';
-        badge.className = 'panel-badge badge-' + risk.level;
+    // ── Liquidity Mini ──────────────────────────────────────────────
+    function updateLiquidityMini() {
+        $('liq-score-mini').textContent = MarketData.getLiquidityScore().toFixed(1);
+        $('liq-spread').textContent = MarketData.getSpreadStatus();
+        $('liq-vol').textContent = MarketData.getVolumeRunRate() + ' vs avg';
+        $('liq-vix').textContent = MarketData.getVIX().toFixed(2);
+    }
 
-        // Debate log
-        const debateLog = $('debate-log');
-        const conflicts = AgentFramework.getDebateConflicts();
-
-        if (conflicts.length === 0) {
-            debateLog.innerHTML = '<div class="log-entry placeholder">No debate conflicts recorded.</div>';
-        } else {
-            debateLog.innerHTML = conflicts.map(c =>
-                `<div class="log-entry"><span class="log-time">[${c.time}]</span> <span class="log-conflict">${c.ticker}:</span> ${c.agents}</div>`
-            ).join('');
+    // ── Options Mini ────────────────────────────────────────────────
+    function updateOptionsMini() {
+        const events = OptionsAnalyzer.getSpotlightEvents();
+        const container = $('options-mini');
+        if (events.length === 0) {
+            container.innerHTML = '<div class="opt-row" style="color:var(--text-dim)">No notable events</div>';
+            return;
         }
+        container.innerHTML = events.slice(0, 6).map(e => {
+            const cls = e.includes('spiking') ? 'bearish' : 'bullish';
+            const ticker = e.split(':')[0];
+            return `<div class="opt-row"><span class="opt-ticker ${cls}">${ticker}</span>: ${e.split(':').slice(1).join(':').trim()}</div>`;
+        }).join('');
     }
 
-    // ── Signal Formatting Helpers ───────────────────────────────────
-    function _signalEmoji(signal) {
-        if (signal === 'BULLISH' || signal === 'STR BUY') return '🟢';
-        if (signal === 'BEARISH' || signal === 'STR SELL') return '🔴';
-        if (signal === 'N/A') return '⬛';
-        return '⚪';
-    }
+    // ── FinMem Mini ─────────────────────────────────────────────────
+    function updateFinMemMini(results) {
+        const recall = AgentFramework.getMemoryRecall();
+        const risk = AgentFramework.getRiskAlert(results);
 
-    function _signalLabel(signal) {
-        const map = {
-            'STR BUY': 'Bullish',
-            'BULLISH': 'Bullish',
-            'NEUTRAL': 'Neutral',
-            'BEARISH': 'Bearish',
-            'STR SELL': 'Bearish',
-            'N/A': 'N/A'
-        };
-        return map[signal] || signal;
-    }
+        // getMemoryRecall returns an array
+        const recallText = Array.isArray(recall) ? recall[0] : (recall || 'No strong pattern matches.');
+        $('memory-recall-mini').textContent = recallText;
 
-    function _signalClass(signal) {
-        if (signal === 'BULLISH' || signal === 'STR BUY') return 'signal-bullish';
-        if (signal === 'BEARISH' || signal === 'STR SELL') return 'signal-bearish';
-        if (signal === 'N/A') return 'signal-na';
-        return 'signal-neutral';
-    }
+        const riskEl = $('risk-alert-mini');
+        const badge = $('anomaly-badge');
 
-    function _consensusClass(consensus) {
-        const map = {
-            'STR BUY': 'consensus-str-buy',
-            'BUY': 'consensus-buy',
-            'HOLD': 'consensus-hold',
-            'SELL': 'consensus-sell',
-            'STR SELL': 'consensus-str-sell'
-        };
-        return map[consensus] || '';
-    }
+        // getRiskAlert returns { level, message }
+        const riskMsg = typeof risk === 'object' ? risk.message : risk;
+        const riskLevel = typeof risk === 'object' ? risk.level : 'nominal';
 
-    function _confClass(conf) {
-        if (conf >= 80) return 'conf-high';
-        if (conf >= 65) return 'conf-med';
-        return 'conf-low';
+        if (riskLevel !== 'nominal') {
+            riskEl.textContent = '⚠️ ' + riskMsg;
+            riskEl.style.color = 'var(--red)';
+            badge.textContent = 'ALERT';
+            badge.classList.add('alert');
+        } else {
+            riskEl.textContent = '🟢 All systems nominal';
+            riskEl.style.color = 'var(--green)';
+            badge.textContent = 'NOMINAL';
+            badge.classList.remove('alert');
+        }
     }
 
     // ── Clock & Countdown ───────────────────────────────────────────
     function updateClock() {
         const now = new Date();
-        const ts = now.getFullYear() + '-' +
-            String(now.getMonth() + 1).padStart(2, '0') + '-' +
-            String(now.getDate()).padStart(2, '0') + ' ' +
-            String(now.getHours()).padStart(2, '0') + ':' +
-            String(now.getMinutes()).padStart(2, '0') + ':' +
-            String(now.getSeconds()).padStart(2, '0');
-        $('header-timestamp').textContent = ts;
+        const y = now.getFullYear();
+        const mo = String(now.getMonth() + 1).padStart(2, '0');
+        const d = String(now.getDate()).padStart(2, '0');
+        const h = String(now.getHours()).padStart(2, '0');
+        const mi = String(now.getMinutes()).padStart(2, '0');
+        const s = String(now.getSeconds()).padStart(2, '0');
+        $('header-timestamp').textContent = `${y}-${mo}-${d} ${h}:${mi}:${s}`;
     }
 
     function startCountdown() {
-        countdownSeconds = 300;
-        updateCountdownDisplay();
         countdownInterval = setInterval(() => {
-            countdownSeconds--;
-            if (countdownSeconds < 0) countdownSeconds = 300;
+            countdownSec--;
+            if (countdownSec < 0) countdownSec = 300;
             updateCountdownDisplay();
         }, 1000);
     }
 
     function resetCountdown() {
-        countdownSeconds = 300;
+        countdownSec = 300;
         updateCountdownDisplay();
     }
 
     function updateCountdownDisplay() {
-        const mins = Math.floor(countdownSeconds / 60);
-        const secs = countdownSeconds % 60;
-        const display = `${mins}:${String(secs).padStart(2, '0')}`;
-        $('countdown-timer').textContent = display;
-
-        // Turn yellow at < 30s, red at < 10s
-        const el = $('countdown-timer');
-        if (countdownSeconds < 10) { el.style.color = 'var(--red)'; el.style.textShadow = '0 0 12px var(--red-glow)'; }
-        else if (countdownSeconds < 30) { el.style.color = 'var(--yellow)'; el.style.textShadow = '0 0 12px var(--yellow-glow)'; }
-        else { el.style.color = 'var(--green)'; el.style.textShadow = '0 0 12px var(--green-glow)'; }
+        const m = Math.floor(countdownSec / 60);
+        const s = countdownSec % 60;
+        $('countdown-timer').textContent = `${m}:${String(s).padStart(2, '0')}`;
     }
 
     function updateMarketHours() {
         const status = MarketData.getMarketStatus();
         const el = $('market-hours-status');
-        el.textContent = status === 'OPEN' ? '● MARKET OPEN' :
-            status === 'PRE-MARKET' ? '◐ PRE-MARKET' :
-                status === 'AFTER-HOURS' ? '◑ AFTER-HOURS' :
-                    '○ MARKET CLOSED';
-        el.className = 'footer-item market-' + status.toLowerCase().replace('-', '');
-        if (status === 'PRE-MARKET' || status === 'AFTER-HOURS') el.classList.add('market-pre');
-        if (status === 'CLOSED') el.classList.add('market-closed');
-        if (status === 'OPEN') el.classList.add('market-open');
+        const icons = { OPEN: '🟢', 'PRE-MARKET': '🟡', 'AFTER-HOURS': '🟠', CLOSED: '○' };
+        el.textContent = `${icons[status] || '○'} MARKET ${status}`;
     }
+
+    // ── Helpers ──────────────────────────────────────────────────────
+    function _sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
+    function _cssId(ticker) { return ticker.replace('.', '_'); }
 
     // ── Launch ──────────────────────────────────────────────────────
     document.addEventListener('DOMContentLoaded', runBootSequence);

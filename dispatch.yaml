@@ -1,0 +1,5 @@
+dispatch:
+  - url: "socratic.wael.bot/*"
+    service: socratic
+  - url: "trade.wael.bot/*"
+    service: trade
