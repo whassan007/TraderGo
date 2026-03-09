@@ -26,15 +26,14 @@ const ForecastAgents = (() => {
         const tf = chartTf || 5; // default 5-min
         _stepSec = tf * 60;     // step in seconds matches candle interval
 
-        const price = MarketData.getPrice(ticker);
-        const hist = MarketData.getHistory(ticker);
-        const vol = MarketData.getVolatility(ticker);
         const candles = MarketData.getOHLCV(ticker, tf);
 
-        // Anchor to last candle's time (not Date.now)
-        const now = candles && candles.length > 0
-            ? candles[candles.length - 1].time
-            : Math.floor(Date.now() / 1000);
+        // Anchor to last candle's time AND price (not global price which may differ per TF)
+        const lastCandle = candles && candles.length > 0 ? candles[candles.length - 1] : null;
+        const now = lastCandle ? lastCandle.time : Math.floor(Date.now() / 1000);
+        const price = lastCandle ? lastCandle.close : MarketData.getPrice(ticker);
+        const hist = MarketData.getHistory(ticker);
+        const vol = MarketData.getVolatility(ticker);
 
         if (!price || !hist.length) return;
 

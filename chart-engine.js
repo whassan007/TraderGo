@@ -304,13 +304,12 @@ const ChartEngine = (() => {
         const allForecasts = ForecastAgents.getForecasts(ticker);
         if (!allForecasts || Object.keys(allForecasts).length === 0) return;
 
-        const price = MarketData.getPrice(ticker);
-
-        // Use last candle's time as anchor (forecasts already start from this)
+        // Use last candle's time AND close price as anchor
+        // (each timeframe has its own price level from independent random walks)
         const candles = MarketData.getOHLCV(ticker, currentTimeframe);
-        const anchorTime = candles && candles.length > 0
-            ? candles[candles.length - 1].time
-            : Math.floor(Date.now() / 1000);
+        const lastCandle = candles && candles.length > 0 ? candles[candles.length - 1] : null;
+        const anchorTime = lastCandle ? lastCandle.time : Math.floor(Date.now() / 1000);
+        const price = lastCandle ? lastCandle.close : MarketData.getPrice(ticker);
 
         // Draw each agent's forecast
         Object.values(allForecasts).forEach(f => {
