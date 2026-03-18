@@ -64,7 +64,7 @@
         // Wire toolbar events
         wireToolbar();
         wireExpiryToggles();
-        wireModeToggle();
+        wireHeaderActions();
         wireBacktestModal();
 
         // Live mode (Finnhub) — opt-in if a key is present
@@ -163,23 +163,49 @@
         } catch (e) { }
     }
 
-    // ── Mode Toggle (LIVE / BACKTEST) ────────────────────────────────
-    function wireModeToggle() {
+    // ── Header Actions (Mode + Cache) ────────────────────────────────
+    function wireHeaderActions() {
         const liveBtn = $('mode-live');
         const btBtn = $('mode-backtest');
-        if (!liveBtn || !btBtn) return;
+        if (liveBtn && btBtn) {
+            liveBtn.addEventListener('click', () => {
+                liveBtn.classList.add('active');
+                btBtn.classList.remove('active');
+                closeBacktestModal();
+            });
 
-        liveBtn.addEventListener('click', () => {
-            liveBtn.classList.add('active');
-            btBtn.classList.remove('active');
-            closeBacktestModal();
-        });
+            btBtn.addEventListener('click', () => {
+                btBtn.classList.add('active');
+                liveBtn.classList.remove('active');
+                openBacktestModal();
+            });
+        }
 
-        btBtn.addEventListener('click', () => {
-            btBtn.classList.add('active');
-            liveBtn.classList.remove('active');
-            openBacktestModal();
-        });
+        const clearBtn = $('clear-cache-btn');
+        if (clearBtn) {
+            clearBtn.addEventListener('click', async () => {
+                if (confirm('Force clear app cache and reload?\n\nThis will fetch the latest deployed code and wipe local data.')) {
+                    clearBtn.style.opacity = '0.5';
+                    try {
+                        if ('caches' in window) {
+                            const keys = await caches.keys();
+                            await Promise.all(keys.map(k => caches.delete(k)));
+                        }
+                        localStorage.clear();
+                        sessionStorage.clear();
+                        if ('serviceWorker' in navigator) {
+                            const regs = await navigator.serviceWorker.getRegistrations();
+                            for (let r of regs) await r.unregister();
+                        }
+                        window.location.reload(true);
+                    } catch (e) {
+                        console.error('Cache clear failed', e);
+                        alert('Force reload executed (CacheStorage failed).');
+                        window.location.reload(true);
+                    }
+                }
+            });
+        }
 
         // Keep Ctrl/Cmd+B shortcut
         document.addEventListener('keydown', (e) => {
