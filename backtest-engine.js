@@ -45,6 +45,12 @@ const BacktestEngine = (() => {
             || null;
     }
 
+    function _getClaudeKey() {
+        return (typeof window !== 'undefined' && window.__CLAUDE_API_KEY)
+            || (typeof localStorage !== 'undefined' && localStorage.getItem('CLAUDE_API_KEY'))
+            || null;
+    }
+
     function _tradingDaysAgo(days) {
         // Walk backwards from today skipping weekends
         const result = new Date();
@@ -117,8 +123,19 @@ const BacktestEngine = (() => {
 
         // Need data for the target ticker
         if (!_rawData[_config.ticker] || _rawData[_config.ticker].length < 10) {
-            console.warn(`[BacktestEngine] Failed to load Finnhub data for ${_config.ticker}. Falling back to cached/mock GBM historical data.`);
-            _generateMockData(_config.ticker, from, to, _config.resolution, [...tickersToFetch]);
+            console.warn(`[BacktestEngine] Failed to load Finnhub data for ${_config.ticker}. Attempting Claude API fallback...`);
+            const claudeKey = _getClaudeKey();
+            let claudeSuccess = false;
+            
+            if (claudeKey) {
+                if (_onProgress) _onProgress({ phase: 'load', done: tickerList.length, total: tickerList.length, msg: 'Generating via Claude AI...' });
+                claudeSuccess = await _fetchClaudeFallback(_config.ticker, from, to, _config.resolution, [...tickersToFetch], claudeKey);
+            }
+            
+            if (!claudeSuccess) {
+                console.warn(`[BacktestEngine] Claude API unavailable or failed. Falling back to cached/mock GBM historical data.`);
+                _generateMockData(_config.ticker, from, to, _config.resolution, [...tickersToFetch]);
+            }
         }
         return true;
     }
@@ -382,6 +399,95 @@ const BacktestEngine = (() => {
             });
         }
         return out;
+    }
+
+    // ── Fetch Fallback Candles via Claude API ───────────────────────
+    async function _fetchClaudeFallback(targetTicker, from, to, tf, allTickers, key) {
+        try {
+            const stepSec = tf * 60;
+            // Limit to ~200 candles to avoid excessive token generation time
+            const count = Math.max(20, Math.min(200, Math.floor((to - from) / stepSec)));
+            
+            const prompt = `Generate highly realistic historical ${tf}-minute OHLCV stock market data for ticker ${targetTicker}. 
+Generate exactly ${count} consecutive records starting at unix timestamp ${from} with a step of ${stepSec} seconds.
+Output ONLY a raw JSON array of objects. Do not include any markdown formatting, backticks, explanations, or text outside the JSON.
+Format:
+[{"time": 1700000000, "open": 500.00, "high": 505.00, "low": 498.00, "close": 502.50, "volume": 12000}, ...]`;
+
+            const res = await fetch('https://api.anthropic.com/v1/messages', {
+                method: 'POST',
+                headers: {
+                    'x-api-key': key,
+                    'anthropic-version': '2023-06-01',
+                    'content-type': 'application/json',
+                    'anthropic-dangerous-direct-browser-access': 'true'
+                },
+                body: JSON.stringify({
+                    model: "claude-3-haiku-20240307",
+                    max_tokens: 4000,
+                    messages: [{role: "user", content: prompt}]
+                })
+            });
+            
+            if (!res.ok) {
+                console.error('[BacktestEngine] Claude API returned status:', res.status);
+                return false;
+            }
+            const json = await res.json();
+            const text = json.content[0].text.trim();
+            
+            // Parse out the JSON array (handles potential markdown backticks from Claude)
+            const match = text.match(/\[[\s\S]*\]/);
+            if (!match) return false;
+            
+            const generatedData = JSON.parse(match[0]);
+            if (!Array.isArray(generatedData) || generatedData.length === 0) return false;
+            
+            _rawData[targetTicker] = generatedData;
+            
+            // For context tickers (like SPY), generate locally synced to the Claude timeline to save tokens/latency
+            const actualCount = generatedData.length;
+            allTickers.forEach(t => {
+                if (t === targetTicker) return;
+                const out = [];
+                let price = t === 'SPY' ? 580.0 : 100.0;
+                
+                try {
+                    if (typeof MarketData !== 'undefined' && MarketData.getPrice) {
+                        const current = MarketData.getPrice(t);
+                        if (current) price = current;
+                    }
+                } catch (e) {}
+
+                for (let i = 0; i < actualCount; i++) {
+                    const time = generatedData[i].time;
+                    const vol = price * (0.0005 + Math.random() * 0.001);
+                    const move = price * (Math.random() - 0.48) * 0.002;
+                    price += move;
+                    out.push({
+                        time: time,
+                        open: price - move/2,
+                        high: price + Math.abs(vol),
+                        low: price - Math.abs(vol),
+                        close: price,
+                        volume: Math.floor(1000 + Math.random() * 50000)
+                    });
+                }
+                _rawData[t] = out;
+            });
+            
+            // Explicitly mark provenance as 'model-generated'
+            try {
+                if (typeof MarketData !== 'undefined' && MarketData.setDataSource) {
+                    MarketData.setDataSource(targetTicker, 'model-generated');
+                }
+            } catch(e) {}
+            
+            return true;
+        } catch (e) {
+            console.error('[BacktestEngine] Claude Fallback error:', e);
+            return false;
+        }
     }
 
     // ── Generate mock candles (Graceful Degradation) ───────────────
