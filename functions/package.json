@@ -2,7 +2,7 @@
   "name": "trader-go-backend",
   "description": "TraderGo Firebase Cloud Functions Backend",
   "engines": {
-    "node": "18"
+    "node": "22"
   },
   "main": "index.js",
   "scripts": {

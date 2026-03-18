@@ -1,10 +1,15 @@
 const functions = require('firebase-functions');
 const express = require('express');
 const cors = require('cors');
-const yahooFinance = require('yahoo-finance2').default;
 
-// Suppress console warnings from yahoo-finance2
-yahooFinance.suppressNotices(['yahooSurvey']);
+let _yfInstance = null;
+async function getYahooFinance() {
+    if (!_yfInstance) {
+        _yfInstance = (await import('yahoo-finance2')).default;
+        _yfInstance.suppressNotices(['yahooSurvey']);
+    }
+    return _yfInstance;
+}
 
 const app = express();
 app.use(cors({ origin: true }));
@@ -16,7 +21,8 @@ app.use(cors({ origin: true }));
 app.get('/api/quote', async (req, res) => {
     try {
         const symbol = req.query.symbol || 'SPY';
-        const quote = await yahooFinance.quote(symbol);
+        const yf = await getYahooFinance();
+        const quote = await yf.quote(symbol);
         
         if (!quote) return res.status(404).json({ error: 'Ticker not found' });
         
@@ -53,7 +59,8 @@ app.get('/api/historical', async (req, res) => {
             chartOptions.range = req.query.range || '5d';
         }
         
-        const result = await yahooFinance.chart(symbol, chartOptions);
+        const yf = await getYahooFinance();
+        const result = await yf.chart(symbol, chartOptions);
         
         if (!result || !result.quotes || result.quotes.length === 0) {
             return res.json([]);
@@ -83,7 +90,8 @@ app.get('/api/historical', async (req, res) => {
 app.get('/api/options', async (req, res) => {
     try {
         const symbol = req.query.symbol || 'SPY';
-        const result = await yahooFinance.options(symbol);
+        const yf = await getYahooFinance();
+        const result = await yf.options(symbol);
         res.json(result);
     } catch (error) {
         console.error('Error fetching options:', error.message);
