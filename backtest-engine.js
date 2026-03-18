@@ -123,7 +123,7 @@ const BacktestEngine = (() => {
 
         // Need data for the target ticker
         if (!_rawData[_config.ticker] || _rawData[_config.ticker].length < 10) {
-            console.warn(`[BacktestEngine] Failed to load Finnhub data for ${_config.ticker}. Attempting Claude API fallback...`);
+            console.warn(`[BacktestEngine] Failed to load Yahoo Finance data for ${_config.ticker}. Attempting Claude API fallback...`);
             const claudeKey = _getClaudeKey();
             let claudeSuccess = false;
             
@@ -381,24 +381,19 @@ const BacktestEngine = (() => {
         } catch (e) { }
     }
 
-    // ── Fetch candles from Finnhub ──────────────────────────────────
+    // ── Fetch candles from Backend (Yahoo Finance) ──────────────────
     async function _fetchCandles(symbol, tf, from, to, key) {
-        const url = `https://finnhub.io/api/v1/stock/candle?symbol=${encodeURIComponent(symbol)}&resolution=${encodeURIComponent(String(tf))}&from=${from}&to=${to}&token=${encodeURIComponent(key)}`;
-        const res = await fetch(url);
-        const data = await res.json();
-        if (!data || data.s !== 'ok' || !Array.isArray(data.t)) return [];
-        const out = [];
-        for (let i = 0; i < data.t.length; i++) {
-            out.push({
-                time: data.t[i],
-                open: data.o[i],
-                high: data.h[i],
-                low: data.l[i],
-                close: data.c[i],
-                volume: data.v[i],
-            });
+        try {
+            const interval = tf >= 1440 ? '1d' : tf >= 60 ? '60m' : `${tf}m`;
+            const url = `/api/historical?symbol=${encodeURIComponent(symbol)}&interval=${interval}&from=${from}&to=${to}`;
+            const res = await fetch(url);
+            if (!res.ok) return [];
+            const data = await res.json();
+            return Array.isArray(data) ? data : [];
+        } catch (e) {
+            console.error('[BacktestEngine] Error fetching candles:', e);
+            return [];
         }
-        return out;
     }
 
     // ── Fetch Fallback Candles via Claude API ───────────────────────

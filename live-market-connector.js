@@ -1,41 +1,19 @@
 /* ══════════════════════════════════════════════════════════════════
-   LIVE-MARKET-CONNECTOR.JS — Finnhub WS + REST bootstrap (Browser)
+   LIVE-MARKET-CONNECTOR.JS — Custom Yahoo Finance REST Backend (Browser)
    Notes:
-   - This runs in the browser (static app). API keys cannot be truly
-     secured client-side; use a server proxy for production.
-   - For dev, store FINNHUB key in localStorage: FINNHUB_API_KEY
+   - Replaced Finnhub API with a free unlimited Yahoo Finance backend
+     running on Google Cloud Functions (Firebase).
    ══════════════════════════════════════════════════════════════════ */
 
 const LiveMarketConnector = (() => {
-    let ws = null;
-    let apiKey = null;
     let connected = false;
     let subscribed = new Set();
     let lastError = null;
 
-    // Throttled quote polling (Finnhub trades stream does not include bid/ask)
     let quotePollTimer = null;
-    const QUOTE_POLL_MS = 5000;
-
-    function _getKey() {
-        return apiKey
-            || (typeof window !== 'undefined' && window.__FINNHUB_API_KEY)
-            || (typeof localStorage !== 'undefined' && localStorage.getItem('FINNHUB_API_KEY'))
-            || null;
-    }
-
-    function setApiKey(key) {
-        apiKey = key;
-        try { if (typeof localStorage !== 'undefined') localStorage.setItem('FINNHUB_API_KEY', key); } catch (e) { }
-    }
+    const QUOTE_POLL_MS = 3000; // Poll every 3 seconds
 
     async function init(opts = {}) {
-        apiKey = opts.apiKey || _getKey();
-        if (!apiKey) {
-            lastError = 'Missing FINNHUB_API_KEY';
-            return false;
-        }
-
         // Mark MarketData as live so synthetic tickers stop moving
         try { MarketData.setMode('live'); } catch (e) { }
 
@@ -45,102 +23,25 @@ const LiveMarketConnector = (() => {
             bars: opts.bars || 500
         });
 
-        connectWS();
+        connected = true;
         startQuotePolling();
         return true;
-    }
-
-    function connectWS() {
-        const key = _getKey();
-        if (!key) return false;
-        disconnectWS();
-
-        const url = `wss://ws.finnhub.io?token=${encodeURIComponent(key)}`;
-        ws = new WebSocket(url);
-
-        ws.addEventListener('open', () => {
-            connected = true;
-            // Subscribe to any pre-queued tickers
-            [...subscribed].forEach(sym => _sendSub(sym));
-        });
-
-        ws.addEventListener('message', (evt) => {
-            try {
-                const msg = JSON.parse(evt.data);
-                if (!msg) return;
-
-                // Trade stream format: { type:'trade', data:[{s, p, t, v}, ...] }
-                if (msg.type === 'trade' && Array.isArray(msg.data)) {
-                    msg.data.forEach(t => {
-                        const ticker = t.s;
-                        const price = t.p;
-                        const ts = typeof t.t === 'number' ? Math.floor(t.t / 1000) : Math.floor(Date.now() / 1000);
-                        const vol = t.v;
-                        MarketData.updatePrice(ticker, price, vol, null, null, ts);
-                        try { MarketData.setDataSource(ticker, 'live'); } catch (e) { }
-                    });
-                }
-            } catch (e) {
-                lastError = e?.message || String(e);
-            }
-        });
-
-        ws.addEventListener('error', () => {
-            lastError = 'WebSocket error';
-        });
-
-        ws.addEventListener('close', () => {
-            connected = false;
-            // Downgrade all subscribed tickers to cached
-            try {
-                [...subscribed].forEach(sym => MarketData.setDataSource(sym, 'cached'));
-            } catch (e) { }
-            // Auto-reconnect with backoff
-            setTimeout(() => {
-                if (!connected) connectWS();
-            }, 1500);
-        });
-
-        return true;
-    }
-
-    function disconnectWS() {
-        try { if (ws) ws.close(); } catch (e) { }
-        ws = null;
-        connected = false;
     }
 
     function subscribe(ticker) {
         if (!ticker) return;
         subscribed.add(ticker);
-        if (connected) _sendSub(ticker);
     }
 
     function subscribeAll(tickers) {
         (tickers || []).forEach(subscribe);
     }
 
-    function _sendSub(ticker) {
-        if (!ws || ws.readyState !== WebSocket.OPEN) return;
-        try {
-            ws.send(JSON.stringify({ type: 'subscribe', symbol: ticker }));
-        } catch (e) {
-            lastError = e?.message || String(e);
-        }
-    }
-
+    // ── Preload Historical Data ──────────────────────────────────────
     async function bootstrapHistorical({ tickers, timeframes, bars = 500 } = {}) {
-        const key = _getKey();
-        if (!key) return false;
         const tfList = Array.isArray(timeframes) ? timeframes : [5];
         const tickList = Array.isArray(tickers) ? tickers : ['SPY'];
 
-        // Finnhub candles use from/to unix seconds and resolution in {1,5,15,30,60,D,W,M}
-        const now = Math.floor(Date.now() / 1000);
-        // Rough window: 500 5m bars ≈ 2.2 days; add buffer so markets gaps don’t underfill
-        const from = now - 60 * 60 * 24 * 10;
-
-        // Concurrency-limited fetch
         const maxConc = 4;
         const queue = [];
         tickList.forEach(ticker => {
@@ -152,11 +53,13 @@ const LiveMarketConnector = (() => {
             while (idx < queue.length) {
                 const { ticker, tf } = queue[idx++];
                 try {
-                    const candles = await fetchCandlesFinnhub(ticker, tf, from, now, key);
-                    if (candles.length) {
+                    const candles = await _fetchCandlesBackend(ticker, tf);
+                    if (candles && candles.length) {
                         MarketData.setOHLCVBuffer(ticker, tf, candles.slice(-bars));
                     }
-                } catch (e) { /* best effort */ }
+                } catch (e) {
+                    console.error('[MarketConnector] Bootstrap history error', e.message);
+                }
             }
         });
 
@@ -164,44 +67,55 @@ const LiveMarketConnector = (() => {
         return true;
     }
 
-    async function fetchCandlesFinnhub(symbol, tf, from, to, key) {
-        const resolution = String(tf);
-        const url = `https://finnhub.io/api/v1/stock/candle?symbol=${encodeURIComponent(symbol)}&resolution=${encodeURIComponent(resolution)}&from=${from}&to=${to}&token=${window.__FINNHUB_API_KEY}`;
+    async function _fetchCandlesBackend(symbol, tf) {
+        // Yahoo Finance intervals: 1m, 2m, 5m, 15m, 30m, 60m, 1d
+        let interval = `${tf}m`;
+        if (tf >= 1440) interval = '1d';
+        
+        let range = '5d';
+        if (tf >= 60) range = '1mo';
+        if (tf >= 1440) range = '1y';
+
+        const url = `/api/historical?symbol=${encodeURIComponent(symbol)}&interval=${interval}&range=${range}`;
         const res = await fetch(url);
-        const data = await res.json();
-        if (!data || data.s !== 'ok' || !Array.isArray(data.t)) return [];
-        const candles = [];
-        for (let i = 0; i < data.t.length; i++) {
-            candles.push({
-                time: data.t[i],
-                open: data.o[i],
-                high: data.h[i],
-                low: data.l[i],
-                close: data.c[i],
-                volume: data.v[i]
-            });
-        }
-        return candles;
+        if (!res.ok) return [];
+        return await res.json();
     }
 
+    // ── Live Quote Polling ──────────────────────────────────────────
     function startQuotePolling() {
         stopQuotePolling();
-        const key = _getKey();
-        if (!key) return;
+        
         quotePollTimer = setInterval(async () => {
-            // Poll bid/ask for current chart ticker only (keeps rate low)
+            // Poll for current primary charts/watchlists
             try {
-                const ticker = (typeof ChartEngine !== 'undefined' && ChartEngine.getCurrentTicker)
-                    ? ChartEngine.getCurrentTicker()
-                    : 'SPY';
-                const q = await fetchBidAskFinnhub(ticker, key);
-                if (q && typeof q.b === 'number' && typeof q.a === 'number') {
-                    const now = Math.floor(Date.now() / 1000);
-                    MarketData.updatePrice(ticker, MarketData.getPrice(ticker), null, q.b, q.a, now);
-                    // REST quotes are ~15min delayed on free tier
-                    try { MarketData.setDataSource(ticker, 'delayed'); } catch (e) { }
+                const activeTickers = new Set();
+                
+                // Add the main chart ticker
+                if (typeof ChartEngine !== 'undefined' && ChartEngine.getCurrentTicker) {
+                    activeTickers.add(ChartEngine.getCurrentTicker());
+                } else if (subscribed.size > 0) {
+                    const first = [...subscribed][0];
+                    activeTickers.add(first);
                 }
-            } catch (e) { }
+                
+                // Bulk polling logic could be added to backend, for now poll sequentially
+                for (const ticker of activeTickers) {
+                    const q = await _fetchQuoteBackend(ticker);
+                    if (q && q.price) {
+                        const now = typeof q.time === 'number' ? q.time : Math.floor(Date.now() / 1000);
+                        MarketData.updatePrice(ticker, q.price, q.volume, null, null, now);
+                        
+                        try { MarketData.setDataSource(ticker, 'live'); } catch (e) { }
+                    }
+                }
+            } catch (e) {
+                lastError = e?.message;
+                // Downgrade to cached visually if failing
+                try {
+                    [...subscribed].forEach(sym => MarketData.setDataSource(sym, 'cached'));
+                } catch(err) {} 
+            }
         }, QUOTE_POLL_MS);
     }
 
@@ -210,13 +124,11 @@ const LiveMarketConnector = (() => {
         quotePollTimer = null;
     }
 
-    async function fetchBidAskFinnhub(symbol, key) {
-        // Finnhub: /stock/bidask?symbol=AAPL&token=...
-        const url = `https://finnhub.io/api/v1/stock/bidask?symbol=${encodeURIComponent(symbol)}&token=${window.__FINNHUB_API_KEY}`;
+    async function _fetchQuoteBackend(symbol) {
+        const url = `/api/quote?symbol=${encodeURIComponent(symbol)}`;
         const res = await fetch(url);
-        const data = await res.json();
-        // Typical response: { a: ask, b: bid, ... }
-        return data || null;
+        if(!res.ok) return null;
+        return await res.json();
     }
 
     function getStatus() {
@@ -225,13 +137,13 @@ const LiveMarketConnector = (() => {
 
     function shutdown() {
         stopQuotePolling();
-        disconnectWS();
+        connected = false;
         subscribed = new Set();
     }
 
     return {
         init,
-        setApiKey,
+        setApiKey: () => {}, // No-op now
         subscribe,
         subscribeAll,
         bootstrapHistorical,
@@ -240,4 +152,3 @@ const LiveMarketConnector = (() => {
         isConnected: () => connected
     };
 })();
-
