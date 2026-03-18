@@ -317,13 +317,7 @@
                 const algo = algoCard ? algoCard.dataset.algo : 'ensemble';
                 const days = dayBtn ? parseInt(dayBtn.dataset.days) : 3;
                 const ticker = $('bt-ticker-label')?.textContent || ChartEngine.getCurrentTicker();
-                const key = _getApiKey();
-
-                if (!key) {
-                    alert('No Finnhub API key found. Please set window.__FINNHUB_API_KEY in config.js');
-                    return;
-                }
-
+                const key = _getApiKey() || 'legacy-no-key-required';
                 // Show progress
                 $('bt-config').style.display = 'none';
                 $('bt-progress').style.display = 'block';
