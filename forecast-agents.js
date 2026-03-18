@@ -35,10 +35,11 @@ const ForecastAgents = (() => {
 
         const candles = MarketData.getOHLCV(ticker, tf);
 
-        // Anchor to last candle's time AND price (not global price which may differ per TF)
-        const lastCandle = candles && candles.length > 0 ? candles[candles.length - 1] : null;
-        const now = lastCandle ? lastCandle.time : Math.floor(Date.now() / 1000);
-        const price = lastCandle ? lastCandle.close : MarketData.getPrice(ticker);
+        // Anchor strictly to the real-time spot price and current time
+        // Decouples the forecast from chart TF misalignment (e.g. 9:30 AM market open modulus issues)
+        const price = MarketData.getPrice(ticker);
+        const now = Math.floor(Date.now() / 1000);
+        
         const hist = MarketData.getHistory(ticker);
         const baseVol = MarketData.getVolatility(ticker);
         const adrPct = (context?.adr && Number.isFinite(context.adr.percentage))
