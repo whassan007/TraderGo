@@ -139,6 +139,7 @@
         ChartEngine.refreshForecasts();
 
         // Update panels
+        if (typeof RecommendationEngine !== 'undefined') updateRecommendationsPanel(selectedTicker);
         updateAgentTable(selectedTicker);
         updateDisagreementPanel(selectedTicker);
         updateLiquidityMini();
@@ -481,6 +482,7 @@
             }
         } catch (e) { }
         ChartEngine.refreshForecasts();
+        if (typeof RecommendationEngine !== 'undefined') updateRecommendationsPanel(ticker);
         updateAgentTable(ticker);
         updateDisagreementPanel(ticker);
         updateAdrMini(ticker, tf, adr);
@@ -793,6 +795,117 @@
     // ── Helpers ──────────────────────────────────────────────────────
     function _sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
     function _cssId(ticker) { return ticker.replace('.', '_'); }
+
+    // ── Recommendations Panel ───────────────────────────────────────
+    function updateRecommendationsPanel(ticker) {
+        if (typeof RecommendationEngine === 'undefined') return;
+        const escapeHTML = (s) => String(s).replace(/[&<>'"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#39;', '"': '&quot;' }[c]));
+        const rec = RecommendationEngine.generateTopRecommendation(ticker);
+        const panel = $('recommendation-panel');
+        if (!panel) return;
+        
+        if (!rec) {
+            panel.innerHTML = '<div style="color: var(--text-dim); font-style: italic;">No recommendation available.</div>';
+            return;
+        }
+        
+        let html = `
+            <div class="rec-header">
+                <div style="margin-bottom: 4px;">
+                    <span style="color: #64748b; font-size: 9px;">MODEL:</span>
+                    <strong style="color: #06b6d4;">${escapeHTML(rec.topModel)}</strong>
+                    <span style="color: #64748b; margin-left: 6px;">CONFIDENCE:</span>
+                    <strong style="color: #22c55e;">${(rec.confidence * 100).toFixed(0)}%</strong>
+                </div>
+                <div class="rec-type-${rec.recommendationType.toLowerCase()}">
+                    ${rec.recommendationType.replace(/_/g, ' ')}
+                </div>
+            </div>
+        `;
+        
+        html += `
+            <div style="padding: 6px; background: rgba(56,189,248,0.08); border-radius: 3px; margin-bottom: 8px;">
+                <div style="display: flex; justify-content: space-between; margin-bottom: 3px;">
+                    <span style="color: #64748b;">Current:</span>
+                    <strong style="color: #e2e8f0;">$${rec.currentPrice.toFixed(2)}</strong>
+                </div>
+                <div style="display: flex; justify-content: space-between;">
+                    <span style="color: #64748b;">Forecast:</span>
+                    <strong style="color: #38bdf8;">$${rec.forecastPrice.toFixed(2)}</strong>
+                    <span style="color: ${rec.forecastChange > 0 ? '#22c55e' : '#ef4444'}; font-weight: 600;">
+                        ${rec.forecastChange > 0 ? '+' : ''}${(rec.forecastChange * 100).toFixed(2)}%
+                    </span>
+                </div>
+            </div>
+        `;
+        
+        html += `
+            <div style="margin-bottom: 8px;">
+                <div style="font-size: 9px; font-weight: 600; color: #a78bfa; margin-bottom: 4px; text-transform: uppercase;">Entry/Exit</div>
+                <div class="rec-entry-exit">
+                    <div class="rec-level">
+                        <span class="rec-level-label">ENTRY</span>
+                        <span class="rec-level-value">$${rec.entryExitLevels.entry}</span>
+                    </div>
+                    <div class="rec-level">
+                        <span class="rec-level-label">STOP LOSS</span>
+                        <span class="rec-level-value" style="color: #ef4444;">$${rec.entryExitLevels.stopLoss}</span>
+                    </div>
+                    <div class="rec-level">
+                        <span class="rec-level-label">TARGET</span>
+                        <span class="rec-level-value" style="color: #22c55e;">$${rec.entryExitLevels.target}</span>
+                    </div>
+                    <div class="rec-level" style="border-bottom: none;">
+                        <span class="rec-level-label">RISK/REWARD</span>
+                        <span class="rec-level-value">${rec.riskReward.ratio}</span>
+                    </div>
+                </div>
+            </div>
+        `;
+        
+        if (rec.optionsStrategies && rec.optionsStrategies.length > 0) {
+            html += `<div class="rec-options-section"><div class="rec-options-title">Suggested Options Strategies</div>`;
+            rec.optionsStrategies.forEach(opt => {
+                html += `
+                    <div class="rec-option-strategy">
+                        <div class="rec-option-name">${escapeHTML(opt.name)}</div>
+                        <div class="rec-option-desc">${escapeHTML(opt.description)}</div>
+                        <div class="rec-option-strikes">
+                            ${opt.strikes.long_strike ? `Long: $${opt.strikes.long_strike}` : ''}
+                            ${opt.strikes.short_strike ? ` / Short: $${opt.strikes.short_strike}` : ''}
+                            ${opt.strikes.expiry_days ? ` — ${opt.strikes.expiry_days}DTE` : ''}
+                        </div>
+                        <div style="font-size: 8px; color: #64748b; margin-top: 2px;">
+                            Max Profit: ${escapeHTML(opt.maxProfit)} | Max Loss: ${escapeHTML(opt.maxLoss)}
+                        </div>
+                    </div>`;
+            });
+            html += `</div>`;
+        }
+        
+        if (rec.alternativeModels && rec.alternativeModels.length > 0) {
+            html += `<div class="rec-alternates"><div class="rec-alternate-title">Other Models</div>`;
+            rec.alternativeModels.forEach(alt => {
+                html += `
+                    <div class="rec-alternate-model">
+                        <span>${escapeHTML(alt.modelName)}</span>
+                        <span style="color: #a78bfa;">${(alt.confidence * 100).toFixed(0)}%</span>
+                    </div>`;
+            });
+            html += `</div>`;
+        }
+        
+        html += `<div style="margin-top: 10px; font-size: 9px; color: #64748b; text-align: center;">Consensus: ${rec.consensusStrength.agreingModels}/${rec.consensusStrength.totalModels} models agree</div>`;
+        
+        panel.innerHTML = html;
+        
+        const badgeEl = $('rec-confidence-badge');
+        if (badgeEl) {
+            badgeEl.textContent = rec.confidenceBadge.label;
+            badgeEl.style.background = rec.confidenceBadge.color;
+            badgeEl.style.color = rec.confidenceBadge.color === '#22c55e' ? '#0a0e17' : '#e2e8f0';
+        }
+    }
 
     // ── Launch ──────────────────────────────────────────────────────
     document.addEventListener('DOMContentLoaded', runBootSequence);

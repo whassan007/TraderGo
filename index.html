@@ -205,6 +205,60 @@
                     </div>
                 </div>
 
+                <!-- Top Recommendation Mini -->
+                <div class="agent-panel">
+                    <div class="sidebar-header">
+                        <h3 class="sidebar-title">⭐ TOP RECOMMENDATION</h3>
+                        <span id="rec-confidence-badge" class="disagree-score" style="background: #22c55e; color: #0a0e17;">VERY HIGH</span>
+                    </div>
+                    
+                    <div id="recommendation-panel" style="padding: 10px; font-size: 11px;">
+                        <div style="color: var(--text-dim); font-style: italic;">Awaiting cycle…</div>
+                    </div>
+                </div>
+
+                <style>
+                    .rec-header {
+                        font-weight: 700;
+                        font-size: 12px;
+                        margin-bottom: 8px;
+                        padding: 8px;
+                        background: rgba(34, 197, 94, 0.1);
+                        border-left: 3px solid #22c55e;
+                        border-radius: 3px;
+                    }
+                    
+                    .rec-type-strong_buy { color: #22c55e; font-weight: 700; }
+                    .rec-type-buy { color: #84cc16; font-weight: 600; }
+                    .rec-type-hold { color: #f97316; font-weight: 600; }
+                    .rec-type-sell { color: #ef4444; font-weight: 600; }
+                    .rec-type-strong_sell { color: #ef4444; font-weight: 700; }
+                    
+                    .rec-entry-exit {
+                        padding: 8px;
+                        background: rgba(56, 189, 248, 0.08);
+                        border-radius: 4px;
+                        margin: 8px 0;
+                        font-family: 'JetBrains Mono', monospace;
+                        font-size: 10px;
+                    }
+                    
+                    .rec-level { display: flex; justify-content: space-between; padding: 3px 0; border-bottom: 1px solid rgba(56, 189, 248, 0.1); }
+                    .rec-level-label { font-weight: 600; color: #64748b; }
+                    .rec-level-value { color: #e2e8f0; font-weight: 600; font-variant-numeric: tabular-nums; }
+                    
+                    .rec-options-section { margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--border); }
+                    .rec-options-title { font-weight: 700; font-size: 10px; color: #a78bfa; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 6px; }
+                    .rec-option-strategy { padding: 6px; background: rgba(167, 139, 250, 0.05); border-left: 2px solid #a78bfa; margin-bottom: 6px; border-radius: 3px; }
+                    .rec-option-name { font-weight: 600; font-size: 10px; color: #a78bfa; margin-bottom: 2px; }
+                    .rec-option-desc { font-size: 9px; color: #94a3b8; margin-bottom: 3px; }
+                    .rec-option-strikes { font-size: 8px; color: #64748b; font-family: 'JetBrains Mono', monospace; }
+                    
+                    .rec-alternates { margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--border); }
+                    .rec-alternate-title { font-size: 9px; color: #64748b; text-transform: uppercase; font-weight: 600; letter-spacing: 0.5px; margin-bottom: 4px; }
+                    .rec-alternate-model { padding: 4px 6px; background: rgba(148, 163, 184, 0.05); border-radius: 3px; margin-bottom: 3px; font-size: 9px; display: flex; justify-content: space-between; }
+                </style>
+
                 <!-- Options Spotlight Mini -->
                 <div class="agent-panel">
                     <div class="sidebar-header">
@@ -263,6 +317,7 @@
     <script src="agents.js"></script>
     <script src="indicators.js"></script>
     <script src="forecast-agents.js"></script>
+    <script src="recommendation-engine.js?v=2"></script>
     <script src="chart-engine.js"></script>
     <script src="dashboard.js?v=2"></script>
 
