@@ -35,10 +35,10 @@ const ForecastAgents = (() => {
 
         const candles = MarketData.getOHLCV(ticker, tf);
 
-        // Anchor strictly to the real-time spot price and current time
-        // Decouples the forecast from chart TF misalignment (e.g. 9:30 AM market open modulus issues)
+        // Anchor strictly to the last active candle time to match the chart's X-axis grid perfectly
         const price = MarketData.getPrice(ticker);
-        const now = Math.floor(Date.now() / 1000);
+        const lastCandle = candles.length > 0 ? candles[candles.length - 1] : null;
+        const anchorTime = lastCandle ? lastCandle.time : Math.floor(Date.now() / 1000);
         
         const hist = MarketData.getHistory(ticker);
         const baseVol = MarketData.getVolatility(ticker);
@@ -55,14 +55,34 @@ const ForecastAgents = (() => {
         forecasts[ticker] = {};
 
         AGENTS.forEach(agent => {
-            forecasts[ticker][agent.id] = _runAgent(agent, ticker, price, hist, vol, candles, now, context);
+            const res = _runAgent(agent, ticker, price, hist, vol, candles, anchorTime, context);
+            // Prepend exact anchor point to seamlessly connect the line to the candlestick
+            if (res && res.projections && res.projections.length > 0) {
+                if (res.projections[0].time > anchorTime) {
+                    res.projections.unshift({ time: anchorTime, value: price, confidence: 1.0 });
+                }
+            }
+            forecasts[ticker][agent.id] = res;
         });
 
         // Ensemble forecast
-        forecasts[ticker]['ensemble'] = _generateEnsemble(ticker, now);
+        const ens = _generateEnsemble(ticker, anchorTime);
+        if (ens && ens.projections && ens.projections.length > 0) {
+            if (ens.projections[0].time > anchorTime) {
+                ens.projections.unshift({ time: anchorTime, value: price, confidence: 1.0 });
+            }
+        }
+        forecasts[ticker]['ensemble'] = ens;
 
         // Monte Carlo
-        monteCarlo[ticker] = _generateMonteCarlo(ticker, price, vol, now, tf);
+        monteCarlo[ticker] = _generateMonteCarlo(ticker, price, vol, anchorTime, tf);
+        if (monteCarlo[ticker]) {
+            monteCarlo[ticker].forEach(path => {
+                if (path.length > 0 && path[0].time > anchorTime) {
+                    path.unshift({ time: anchorTime, value: price });
+                }
+            });
+        }
     }
 
     // ── Agent dispatch ──────────────────────────────────────────────
