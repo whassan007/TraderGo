@@ -51,6 +51,11 @@
                 <span class="header-val" id="header-status">INIT</span>
             </div>
             <div class="top-bar-right">
+                <div class="mode-toggle" id="mode-toggle">
+                    <button class="mode-btn active" id="mode-live" data-mode="live">🟢 LIVE</button>
+                    <button class="mode-btn" id="mode-backtest" data-mode="backtest">🔙 BACKTEST</button>
+                </div>
+                <span class="sep">|</span>
                 <span class="infra-tag">🖥️ GKE / Qlib+Vertex / FinMem-TGI</span>
                 <span class="sep">|</span>
                 <span class="countdown-label">NEXT:</span>
@@ -66,6 +71,7 @@
                         <span class="ticker-symbol" id="toolbar-ticker">SPY</span>
                         <span class="ticker-price" id="toolbar-price">$575.00</span>
                         <span class="ticker-change" id="toolbar-change">+0.00%</span>
+                        <span class="data-source-badge" id="toolbar-source-badge" title="Data source">⚪ MODEL</span>
                     </button>
                 </div>
                 <div class="timeframe-group">
@@ -82,6 +88,7 @@
                     <button class="ind-btn" data-ind="bb" title="Bollinger Bands">BB</button>
                     <button class="ind-btn" data-ind="vwap" title="VWAP">VWAP</button>
                     <button class="ind-btn sr-btn" data-ind="sr" title="Support & Resistance">S&R</button>
+                    <button class="ind-btn adr-btn" data-ind="adr" title="Average Daily Range (20)">ADR</button>
                 </div>
                 <div class="forecast-toggles">
                     <span class="toggle-label">FORECASTS</span>
@@ -178,10 +185,33 @@
                     </div>
                 </div>
 
+                <!-- ADR Mini -->
+                <div class="agent-panel adr-info" id="adr-panel">
+                    <div class="sidebar-header">
+                        <h3 class="sidebar-title">📏 ADR</h3>
+                        <span class="adr-badge" id="adr-badge">—</span>
+                    </div>
+                    <div class="adr-metrics">
+                        <div class="adr-row">
+                            <span>Expected Daily Range</span>
+                            <span id="adr-range">±$— (—%)</span>
+                        </div>
+                        <div class="adr-row">
+                            <span>Compression</span>
+                            <span id="adr-trend">—</span>
+                        </div>
+                    </div>
+                </div>
+
                 <!-- Options Spotlight Mini -->
                 <div class="agent-panel">
                     <div class="sidebar-header">
                         <h3 class="sidebar-title">🔮 OPTIONS</h3>
+                        <div class="expiry-toggles" id="expiry-toggles">
+                            <button class="expiry-btn expiry-0dte active" id="toggle-0dte" title="Show 0DTE strikes">0DTE</button>
+                            <button class="expiry-btn expiry-weekly active" id="toggle-weekly" title="Show weekly strikes">W</button>
+                            <button class="expiry-btn expiry-monthly" id="toggle-monthly" title="Show monthly strikes">M</button>
+                        </div>
                     </div>
                     <div class="options-mini" id="options-mini">
                         <div class="opt-row placeholder-cell">Awaiting cycle…</div>
@@ -219,14 +249,105 @@
     <!-- Lightweight Charts CDN -->
     <script src="https://unpkg.com/lightweight-charts@4.1.3/dist/lightweight-charts.standalone.production.js"></script>
 
+    <!-- API Config (keys) — load before all modules -->
+    <script src="config.js"></script>
+
     <!-- App Modules -->
     <script src="market-data.js"></script>
     <script src="options.js"></script>
+    <script src="live-market-connector.js"></script>
+    <script src="backtest-engine.js"></script>
+    <script src="backtest-charts.js"></script>
     <script src="agents.js"></script>
     <script src="indicators.js"></script>
     <script src="forecast-agents.js"></script>
     <script src="chart-engine.js"></script>
     <script src="dashboard.js"></script>
+
+    <!-- Backtest Modal Overlay -->
+    <div id="backtest-modal" class="bt-modal-overlay" style="display:none;">
+        <div class="bt-modal">
+            <div class="bt-modal-header">
+                <div class="bt-modal-title">
+                    <span class="bt-icon">📊</span> BACKTEST ENGINE
+                </div>
+                <button class="bt-modal-close" id="bt-modal-close">✕</button>
+            </div>
+
+            <!-- Config Section -->
+            <div class="bt-config" id="bt-config">
+                <div class="bt-config-section">
+                    <div class="bt-config-label">SELECT ALGORITHM</div>
+                    <div class="bt-algo-grid" id="bt-algo-grid">
+                        <!-- Populated dynamically -->
+                    </div>
+                </div>
+
+                <div class="bt-config-row">
+                    <div class="bt-config-section">
+                        <div class="bt-config-label">BACKTEST WINDOW</div>
+                        <div class="bt-day-picker" id="bt-day-picker">
+                            <button class="bt-day-btn" data-days="1">1 Day</button>
+                            <button class="bt-day-btn" data-days="2">2 Days</button>
+                            <button class="bt-day-btn active" data-days="3">3 Days</button>
+                            <button class="bt-day-btn" data-days="4">4 Days</button>
+                            <button class="bt-day-btn" data-days="5">5 Days</button>
+                        </div>
+                    </div>
+                    <div class="bt-config-section">
+                        <div class="bt-config-label">TICKER</div>
+                        <div class="bt-ticker-select">
+                            <span class="bt-selected-ticker" id="bt-ticker-label">SPY</span>
+                            <span class="bt-ticker-hint">(current chart ticker)</span>
+                        </div>
+                    </div>
+                </div>
+
+                <button class="bt-run-btn" id="bt-run-btn">
+                    <span class="bt-run-icon">▶</span> RUN BACKTEST
+                </button>
+            </div>
+
+            <!-- Progress -->
+            <div class="bt-progress" id="bt-progress" style="display:none;">
+                <div class="bt-progress-label">Running backtest… <span id="bt-progress-pct">0%</span></div>
+                <div class="bt-progress-track">
+                    <div class="bt-progress-fill" id="bt-progress-fill"></div>
+                </div>
+            </div>
+
+            <!-- Results -->
+            <div class="bt-results" id="bt-results" style="display:none;">
+                <div class="bt-result-header">
+                    <span class="bt-result-algo" id="bt-result-algo"></span>
+                    <span class="bt-result-period" id="bt-result-period"></span>
+                </div>
+
+                <!-- Metrics Cards -->
+                <div id="bt-metrics-container"></div>
+
+                <!-- Tab Navigation -->
+                <div class="bt-tabs">
+                    <button class="bt-tab active" data-tab="equity">Equity Curve</button>
+                    <button class="bt-tab" data-tab="trades">Trade Log</button>
+                </div>
+
+                <!-- Tab Content -->
+                <div class="bt-tab-content" id="bt-tab-equity" style="display:block;">
+                    <div class="bt-chart-container" id="bt-equity-chart"></div>
+                </div>
+                <div class="bt-tab-content" id="bt-tab-trades" style="display:none;">
+                    <div id="bt-trade-log"></div>
+                </div>
+
+                <!-- Actions -->
+                <div class="bt-actions">
+                    <button class="bt-action-btn" id="bt-export-btn">📥 EXPORT JSON</button>
+                    <button class="bt-action-btn secondary" id="bt-reset-btn">↻ NEW TEST</button>
+                </div>
+            </div>
+        </div>
+    </div>
 </body>
 
 </html>

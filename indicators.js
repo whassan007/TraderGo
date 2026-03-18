@@ -138,6 +138,39 @@ const Indicators = (() => {
         return result;
     }
 
+    // ── ADR (Average Daily Range) ───────────────────────────────────
+    // ADR = average(high - low) over last N candles (timeframe-specific)
+    // ADR% = (ADR / close) * 100  (close = last candle close)
+    function adr(candles, period = 20) {
+        const safePeriod = Math.max(1, Math.floor(period || 20));
+        if (!candles || candles.length === 0) {
+            return { value: 0, percentage: 0, period: safePeriod };
+        }
+
+        const lastClose = candles[candles.length - 1]?.close;
+        const slice = candles.slice(-Math.min(safePeriod, candles.length));
+
+        let sum = 0;
+        let n = 0;
+        for (const c of slice) {
+            if (!c) continue;
+            const hi = typeof c.high === 'number' ? c.high : null;
+            const lo = typeof c.low === 'number' ? c.low : null;
+            if (hi === null || lo === null) continue;
+            const range = hi - lo;
+            if (!Number.isFinite(range) || range < 0) continue;
+            sum += range;
+            n++;
+        }
+
+        const value = n > 0 ? (sum / n) : 0;
+        const percentage = (Number.isFinite(lastClose) && lastClose > 0)
+            ? (value / lastClose) * 100
+            : 0;
+
+        return { value, percentage, period: safePeriod };
+    }
+
     // ═══════════════════════════════════════════════════════════════════
     //  ADVANCED SUPPORT & RESISTANCE ENGINE  (Stateful)
     // ═══════════════════════════════════════════════════════════════════
@@ -445,7 +478,7 @@ const Indicators = (() => {
 
     // ── Public API ──────────────────────────────────────────────────
     return {
-        sma, ema, rsi, macd, bollingerBands, vwap,
+        sma, ema, rsi, macd, bollingerBands, vwap, adr,
         advancedSR, getSRRenderInfo, SR_COLORS, TF_WEIGHT
     };
 })();

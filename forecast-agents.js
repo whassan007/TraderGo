@@ -20,11 +20,18 @@ const ForecastAgents = (() => {
 
     // Current step interval in seconds (set per forecast call)
     let _stepSec = 300;
+    let _tfMin = 5;
+
+    // Context per ticker (e.g., ADR expected move)
+    let _context = {}; // { [ticker]: { adr?: { value, percentage, period }, tf?: number } }
 
     // ── Run forecasts for a ticker ──────────────────────────────────
-    function generateForecasts(ticker, chartTf) {
+    function generateForecasts(ticker, chartTf, context = {}) {
         const tf = chartTf || 5; // default 5-min
+        _tfMin = tf;
         _stepSec = tf * 60;     // step in seconds matches candle interval
+
+        _context[ticker] = { ...(context || {}), tf };
 
         const candles = MarketData.getOHLCV(ticker, tf);
 
@@ -33,38 +40,56 @@ const ForecastAgents = (() => {
         const now = lastCandle ? lastCandle.time : Math.floor(Date.now() / 1000);
         const price = lastCandle ? lastCandle.close : MarketData.getPrice(ticker);
         const hist = MarketData.getHistory(ticker);
-        const vol = MarketData.getVolatility(ticker);
+        const baseVol = MarketData.getVolatility(ticker);
+        const adrPct = (context?.adr && Number.isFinite(context.adr.percentage))
+            ? Math.max(0, context.adr.percentage) / 100
+            : null;
+        // Blend realized vol with ADR-derived move expectation (simple calibration)
+        const vol = (adrPct !== null)
+            ? (baseVol * 0.6 + adrPct * 0.4)
+            : baseVol;
 
         if (!price || !hist.length) return;
 
         forecasts[ticker] = {};
 
         AGENTS.forEach(agent => {
-            forecasts[ticker][agent.id] = _runAgent(agent, ticker, price, hist, vol, candles, now);
+            forecasts[ticker][agent.id] = _runAgent(agent, ticker, price, hist, vol, candles, now, context);
         });
 
         // Ensemble forecast
         forecasts[ticker]['ensemble'] = _generateEnsemble(ticker, now);
 
         // Monte Carlo
-        monteCarlo[ticker] = _generateMonteCarlo(ticker, price, vol, now);
+        monteCarlo[ticker] = _generateMonteCarlo(ticker, price, vol, now, tf);
     }
 
     // ── Agent dispatch ──────────────────────────────────────────────
-    function _runAgent(agent, ticker, price, hist, vol, candles, now) {
+    function _runAgent(agent, ticker, price, hist, vol, candles, now, context) {
         switch (agent.id) {
-            case 'lstm_predictor': return _lstmPredictor(agent, price, hist, vol, now);
-            case 'transformer': return _transformerModel(agent, price, hist, candles, now);
-            case 'momentum_model': return _momentumModel(agent, price, hist, now);
-            case 'volatility': return _volatilityModel(agent, price, vol, now);
-            case 'sentiment': return _sentimentModel(agent, ticker, price, now);
+            case 'lstm_predictor': return _lstmPredictor(agent, price, hist, vol, now, _tfMin);
+            case 'transformer': return _transformerModel(agent, price, hist, candles, now, _tfMin);
+            case 'momentum_model': return _momentumModel(agent, price, hist, now, _tfMin);
+            case 'volatility': return _volatilityModel(agent, price, vol, now, context, _tfMin);
+            case 'sentiment': return _sentimentModel(agent, ticker, price, now, _tfMin);
             default: return null;
         }
     }
 
+    function _stepsFor(agentHorizonMin, tfMin) {
+        const tf = Math.max(1, Math.floor(tfMin || 5));
+        return Math.max(3, Math.round((agentHorizonMin || 30) / tf));
+    }
+
+    function _noiseScale(tfMin, baseTfMin = 5) {
+        // Brownian scaling: noise ∝ sqrt(dt)
+        const tf = Math.max(1, Math.floor(tfMin || baseTfMin));
+        return Math.sqrt(tf / baseTfMin);
+    }
+
     // ── LSTM Predictor (recurrent sequence extrapolation) ───────────
-    function _lstmPredictor(agent, price, hist, vol, now) {
-        const steps = 12;  // 12 points over 60 mins (5-min intervals)
+    function _lstmPredictor(agent, price, hist, vol, now, tfMin) {
+        const steps = _stepsFor(agent.horizon, tfMin);
         const projections = [];
         let p = price;
 
@@ -78,7 +103,7 @@ const ForecastAgents = (() => {
             const t = i / steps;
             const decay = Math.exp(-0.5 * t);
             const trendComponent = trend * decay * p;
-            const noise = MarketData.normalRandom() * vol * price * 0.002;
+            const noise = MarketData.normalRandom() * vol * price * 0.002 * _noiseScale(tfMin);
             p = p + trendComponent + noise;
             projections.push({
                 time: now + i * _stepSec,
@@ -98,8 +123,8 @@ const ForecastAgents = (() => {
     }
 
     // ── Transformer Model (attention-based pattern matching) ────────
-    function _transformerModel(agent, price, hist, candles, now) {
-        const steps = 6;  // 6 points over 30 mins
+    function _transformerModel(agent, price, hist, candles, now, tfMin) {
+        const steps = _stepsFor(agent.horizon, tfMin);
         const projections = [];
         let p = price;
 
@@ -118,7 +143,7 @@ const ForecastAgents = (() => {
         for (let i = 1; i <= steps; i++) {
             const t = i / steps;
             const continuation = patternDelta * (1 - t * 0.5);
-            const noise = MarketData.normalRandom() * price * 0.001;
+            const noise = MarketData.normalRandom() * price * 0.001 * _noiseScale(tfMin);
             p = p * (1 + continuation) + noise;
             projections.push({
                 time: now + i * _stepSec,
@@ -138,8 +163,8 @@ const ForecastAgents = (() => {
     }
 
     // ── Momentum Model (EMA trend extension) ────────────────────────
-    function _momentumModel(agent, price, hist, now) {
-        const steps = 3;  // 3 points over 15 mins
+    function _momentumModel(agent, price, hist, now, tfMin) {
+        const steps = _stepsFor(agent.horizon, tfMin);
         const projections = [];
         let p = price;
 
@@ -149,7 +174,7 @@ const ForecastAgents = (() => {
 
         for (let i = 1; i <= steps; i++) {
             const acceleration = momentum * (1 + i * 0.1);  // momentum accelerates
-            const noise = MarketData.normalRandom() * price * 0.0008;
+            const noise = MarketData.normalRandom() * price * 0.0008 * _noiseScale(tfMin);
             p = p * (1 + acceleration * 0.5) + noise;
             projections.push({
                 time: now + i * _stepSec,
@@ -169,8 +194,8 @@ const ForecastAgents = (() => {
     }
 
     // ── Volatility Model (vol-adjusted mean reversion) ──────────────
-    function _volatilityModel(agent, price, vol, now) {
-        const steps = 9;  // 9 points over 45 mins
+    function _volatilityModel(agent, price, vol, now, context, tfMin) {
+        const steps = _stepsFor(agent.horizon, tfMin);
         const projections = [];
         let p = price;
 
@@ -178,11 +203,18 @@ const ForecastAgents = (() => {
         const equilibrium = price * (1 + (Math.random() - 0.5) * 0.002);
         const reversionSpeed = 0.15;
 
+        const adrAbs = context?.adr && Number.isFinite(context.adr.value) ? context.adr.value : null;
+        const clampK = 1.15; // allow modest overshoot beyond ADR
+
         for (let i = 1; i <= steps; i++) {
             const t = i / steps;
             const reversion = (equilibrium - p) * reversionSpeed * t;
-            const volNoise = MarketData.normalRandom() * vol * price * 0.0015 * (1 + t);
+            const volNoise = MarketData.normalRandom() * vol * price * 0.0015 * (1 + t) * _noiseScale(tfMin);
             p = p + reversion + volNoise;
+            if (adrAbs !== null && adrAbs > 0) {
+                const maxMove = adrAbs * clampK;
+                p = Math.max(price - maxMove, Math.min(price + maxMove, p));
+            }
             projections.push({
                 time: now + i * _stepSec,
                 value: Math.max(0.01, p),
@@ -197,13 +229,14 @@ const ForecastAgents = (() => {
             direction: finalPrice > price * 1.001 ? 'BULLISH' : finalPrice < price * 0.999 ? 'BEARISH' : 'NEUTRAL',
             predicted_price: finalPrice,
             confidence_score: 0.75,
-            vol_expected: vol
+            vol_expected: vol,
+            adr_expected: context?.adr || null
         };
     }
 
     // ── Sentiment Model (options flow sentiment projection) ─────────
-    function _sentimentModel(agent, ticker, price, now) {
-        const steps = 6;  // 6 points over 30 mins
+    function _sentimentModel(agent, ticker, price, now, tfMin) {
+        const steps = _stepsFor(agent.horizon, tfMin);
         const projections = [];
         let p = price;
 
@@ -222,7 +255,7 @@ const ForecastAgents = (() => {
         for (let i = 1; i <= steps; i++) {
             const t = i / steps;
             const sentimentDrift = sentimentBias * (1 - t * 0.3);
-            const noise = MarketData.normalRandom() * price * 0.001;
+            const noise = MarketData.normalRandom() * price * 0.001 * _noiseScale(tfMin);
             p = p * (1 + sentimentDrift) + noise;
             projections.push({
                 time: now + i * _stepSec,
@@ -284,11 +317,14 @@ const ForecastAgents = (() => {
     }
 
     // ── Monte Carlo Simulation ──────────────────────────────────────
-    function _generateMonteCarlo(ticker, price, vol, now) {
+    function _generateMonteCarlo(ticker, price, vol, now, tfMin) {
         const numPaths = 50;
-        const steps = 12;
+        const maxHorizonMin = 60;
+        const tf = Math.max(1, Math.floor(tfMin || 5));
+        const steps = Math.max(8, Math.round(maxHorizonMin / tf));
         const paths = [];
-        const sigma = vol / Math.sqrt(252 * 78);  // per 5-min
+        const barsPerDay = 390 / tf;
+        const sigma = vol / Math.sqrt(252 * barsPerDay);  // per-step
 
         for (let p = 0; p < numPaths; p++) {
             const path = [];
@@ -368,6 +404,7 @@ const ForecastAgents = (() => {
         getForecasts: ticker => forecasts[ticker] || {},
         getMonteCarlo: ticker => monteCarlo[ticker] || [],
         getDisagreement,
-        getConfidenceBands
+        getConfidenceBands,
+        getContext: ticker => _context[ticker] || {}
     };
 })();

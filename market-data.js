@@ -64,13 +64,23 @@ const MarketData = (() => {
     let tickTimestamps = {};       // per-ticker last tick unix time
     let vwapData = {};             // { ticker: { cumVolPrice, cumVol, value } }
     let initialized = false;
+    let mode = 'sim'; // 'sim' | 'live' | 'backtest'
+    let lastLiveUpdateAt = {}; // { ticker: unixSec }
+
+    // ── Data Source Tracking ────────────────────────────────────────
+    // source: 'live' | 'delayed' | 'cached' | 'model-generated'
+    const STALE_LIVE_SEC = 30;     // after 30s without WS update → 'cached'
+    const STALE_CACHED_SEC = 120;  // after 2min cached → 'model-generated'
+    let dataSources = {};          // { ticker: { source, updatedAt } }
 
     const HISTORY_LENGTH = 500;    // 500 ticks deep
     const OHLCV_MAX = 500;        // max candles per timeframe
     const TIMEFRAMES = [1, 5, 15, 60];   // minutes
+    const EXTRA_TIMEFRAMES = ['D']; // supported for historical fetch (not charted yet)
 
     // ── Initialize ──────────────────────────────────────────────────
-    function init() {
+    async function init(opts = {}) {
+        mode = opts.mode || mode || 'sim';
         const now = Math.floor(Date.now() / 1000);
 
         PORTFOLIO.forEach(ticker => {
@@ -82,6 +92,8 @@ const MarketData = (() => {
             bidAskSpreads[ticker] = _generateSpread(ticker);
             tickTimestamps[ticker] = now;
             vwapData[ticker] = { cumVolPrice: 0, cumVol: 0, value: prices[ticker] };
+            lastLiveUpdateAt[ticker] = 0;
+            dataSources[ticker] = { source: mode === 'sim' ? 'model-generated' : 'cached', updatedAt: now };
 
             // Init OHLCV buffers
             ohlcvBuffers[ticker] = {};
@@ -91,11 +103,18 @@ const MarketData = (() => {
                 currentCandles[ticker][tf] = null;
             });
 
-            // Pre-generate historical candles for chart (200 5-min candles ≈ 16.7 hours)
-            _generateHistoricalCandles(ticker, now);
+            if (mode === 'sim') {
+                // Pre-generate historical candles for chart (synthetic)
+                _generateHistoricalCandles(ticker, now);
+            }
         });
 
         initialized = true;
+
+        // In live mode, defer to the connector for historical bootstrap.
+        // This keeps MarketData pure and testable.
+        if (mode === 'live') return true;
+        return true;
     }
 
     // ── Generate synthetic historical OHLCV ─────────────────────────
@@ -144,6 +163,7 @@ const MarketData = (() => {
     // ── Simulate Next Tick (called every ~1s from dashboard) ────────
     function microTick() {
         if (!initialized) init();
+        if (mode !== 'sim') return;
         const now = Math.floor(Date.now() / 1000);
         const spyDrift = _gbmMicroReturn('SPY');
 
@@ -177,6 +197,7 @@ const MarketData = (() => {
     // ── Full 5-min tick (keeps backward compat with agents) ─────────
     function tick() {
         if (!initialized) init();
+        if (mode !== 'sim') return;
         const spyDrift = _gbmReturn('SPY');
         PORTFOLIO.forEach(ticker => {
             previousPrices[ticker] = prices[ticker];
@@ -191,6 +212,76 @@ const MarketData = (() => {
             bidAskSpreads[ticker] = _generateSpread(ticker);
         });
     }
+
+    // ── Live/External Ingestion ─────────────────────────────────────
+    function updatePrice(ticker, price, volume = null, bid = null, ask = null, timeUnix = null) {
+        if (!initialized) init();
+        if (!ticker) return;
+        const now = timeUnix || Math.floor(Date.now() / 1000);
+
+        if (typeof price === 'number' && Number.isFinite(price)) {
+            previousPrices[ticker] = prices[ticker] ?? price;
+            prices[ticker] = price;
+            tickTimestamps[ticker] = now;
+            lastLiveUpdateAt[ticker] = now;
+
+            // Update history
+            if (!priceHistory[ticker]) priceHistory[ticker] = [];
+            priceHistory[ticker].push(price);
+            if (priceHistory[ticker].length > HISTORY_LENGTH) priceHistory[ticker].shift();
+        }
+
+        if (typeof volume === 'number' && Number.isFinite(volume)) {
+            volumes[ticker] = volume;
+        }
+
+        if (typeof bid === 'number' && typeof ask === 'number' && Number.isFinite(bid) && Number.isFinite(ask)) {
+            bidAskSpreads[ticker] = Math.max(0, ask - bid);
+        }
+
+        // Update OHLCV candles (use volume as per-tick increment if provided; otherwise small proxy)
+        const volInc = (typeof volume === 'number' && Number.isFinite(volume) && volume >= 0)
+            ? Math.max(0, Math.round(volume / 390))
+            : 0;
+        _updateCandles(ticker, now, prices[ticker], volInc);
+
+        // VWAP accumulator (best-effort)
+        const v = volInc || 1;
+        if (!vwapData[ticker]) vwapData[ticker] = { cumVolPrice: 0, cumVol: 0, value: prices[ticker] };
+        vwapData[ticker].cumVolPrice += prices[ticker] * v;
+        vwapData[ticker].cumVol += v;
+        vwapData[ticker].value = vwapData[ticker].cumVol > 0
+            ? vwapData[ticker].cumVolPrice / vwapData[ticker].cumVol
+            : prices[ticker];
+    }
+
+    function setOHLCVBuffer(ticker, timeframe, candles) {
+        if (!ticker || !timeframe) return;
+        if (!ohlcvBuffers[ticker]) ohlcvBuffers[ticker] = {};
+        ohlcvBuffers[ticker][timeframe] = Array.isArray(candles) ? candles.slice(-OHLCV_MAX) : [];
+
+        // Seed current candle with the last candle (so live updates extend naturally)
+        const last = ohlcvBuffers[ticker][timeframe].length
+            ? ohlcvBuffers[ticker][timeframe][ohlcvBuffers[ticker][timeframe].length - 1]
+            : null;
+        if (!currentCandles[ticker]) currentCandles[ticker] = {};
+        currentCandles[ticker][timeframe] = last ? { ...last } : null;
+
+        // Seed price from latest 5m candle if available
+        if (timeframe === 5 && last && typeof last.close === 'number') {
+            previousPrices[ticker] = prices[ticker] ?? last.close;
+            prices[ticker] = last.close;
+            if (!priceHistory[ticker]) priceHistory[ticker] = [];
+            if (priceHistory[ticker].length === 0) priceHistory[ticker] = [last.close];
+        }
+    }
+
+    function setMode(nextMode) {
+        mode = nextMode || mode;
+    }
+
+    function getMode() { return mode; }
+    function getLastLiveUpdateAt(ticker) { return lastLiveUpdateAt[ticker] || 0; }
 
     // ── Update OHLCV candles with a new price tick ──────────────────
     function _updateCandles(ticker, time, price, vol) {
@@ -386,9 +477,44 @@ const MarketData = (() => {
         return 'Other';
     }
 
+    // ── Data Source API ─────────────────────────────────────────────
+    function setDataSource(ticker, source) {
+        if (!ticker) return;
+        dataSources[ticker] = { source, updatedAt: Math.floor(Date.now() / 1000) };
+    }
+
+    function getDataSource(ticker) {
+        const ds = dataSources[ticker];
+        if (!ds) return { source: 'model-generated', lastUpdated: 0, staleSec: Infinity };
+        const now = Math.floor(Date.now() / 1000);
+        const staleSec = now - (ds.updatedAt || 0);
+
+        // Auto-downgrade based on staleness (only if originally live or delayed)
+        let effectiveSource = ds.source;
+        if (ds.source === 'live' && staleSec > STALE_LIVE_SEC) {
+            effectiveSource = 'cached';
+        }
+        if ((ds.source === 'live' || ds.source === 'delayed' || ds.source === 'cached') && staleSec > STALE_CACHED_SEC) {
+            effectiveSource = 'model-generated';
+        }
+        return { source: effectiveSource, lastUpdated: ds.updatedAt, staleSec };
+    }
+
+    function getAllSourceStats() {
+        const stats = { live: 0, delayed: 0, cached: 0, 'model-generated': 0 };
+        PORTFOLIO.forEach(t => {
+            const ds = getDataSource(t);
+            stats[ds.source] = (stats[ds.source] || 0) + 1;
+        });
+        return stats;
+    }
+
     return {
-        PORTFOLIO, NO_OPTIONS, SECTORS, VOLATILITY,
+        PORTFOLIO, NO_OPTIONS, SECTORS, VOLATILITY, BASE_PRICES,
         init, tick, microTick,
+        updatePrice, setOHLCVBuffer,
+        setMode, getMode, getLastLiveUpdateAt,
+        setDataSource, getDataSource, getAllSourceStats,
         getPrice: t => prices[t],
         getPreviousPrice: t => previousPrices[t],
         getVolume: t => volumes[t],
