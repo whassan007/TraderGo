@@ -315,7 +315,8 @@
                 const algoCard = document.querySelector('.bt-algo-card.active');
                 const dayBtn = document.querySelector('.bt-day-btn.active');
                 const algo = algoCard ? algoCard.dataset.algo : 'ensemble';
-                const days = dayBtn ? parseInt(dayBtn.dataset.days) : 3;
+                const days = dayBtn && dayBtn.dataset.days ? parseInt(dayBtn.dataset.days) : 3;
+                const year = dayBtn && dayBtn.dataset.year ? parseInt(dayBtn.dataset.year) : null;
                 const ticker = $('bt-ticker-label')?.textContent || ChartEngine.getCurrentTicker();
                 const key = _getApiKey() || 'legacy-no-key-required';
                 // Show progress
@@ -327,11 +328,9 @@
                 runBtn.disabled = true;
 
                 let loadPct = 0, replayPct = 0;
-
-                const ok = await BacktestEngine.init({
+                const config = {
                     algorithm: algo,
-                    days,
-                    ticker,
+                    ticker: ticker,
                     apiKey: key,
                     onProgress: (p) => {
                         if (p.phase === 'load') loadPct = (p.done / p.total) * 100;
@@ -339,8 +338,13 @@
                         const pct = (loadPct * 0.3 + replayPct * 0.7);
                         $('bt-progress-pct').textContent = `${pct.toFixed(0)}%`;
                         $('bt-progress-fill').style.width = `${pct.toFixed(0)}%`;
-                    },
-                });
+                    }
+                };
+                
+                if (year) config.year = year;
+                else config.days = days;
+
+                const ok = await BacktestEngine.init(config);
 
                 if (!ok) {
                     $('bt-progress').style.display = 'none';

@@ -83,8 +83,16 @@ const BacktestEngine = (() => {
 
         // (Graceful degradation: if API key is missing or rate limited, we will fallback to mock GBM data)
 
-        const endDate = new Date();
-        const startDate = _tradingDaysAgo(_config.days);
+        let startDate, endDate;
+        if (config.year) {
+            _config.year = parseInt(config.year);
+            startDate = new Date(_config.year, 0, 1);
+            endDate = new Date(_config.year, 11, 31, 23, 59, 59);
+        } else {
+            endDate = new Date();
+            startDate = _tradingDaysAgo(_config.days);
+        }
+
         const from = Math.floor(startDate.getTime() / 1000);
         const to = Math.floor(endDate.getTime() / 1000);
 
