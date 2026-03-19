@@ -372,7 +372,11 @@ const ForecastAgents = (() => {
         const mean = prices.reduce((a, b) => a + b, 0) / prices.length;
         const variance = prices.reduce((a, b) => a + (b - mean) ** 2, 0) / prices.length;
         const stdDev = Math.sqrt(variance);
-        const cvPct = (stdDev / mean) * 100;
+        
+        let cvPct = 0;
+        if (stdDev > 0) {
+            cvPct = (stdDev / mean) * 100;
+        }
 
         // Build pairwise disagreement
         const details = {};
@@ -382,12 +386,19 @@ const ForecastAgents = (() => {
                 const p2 = f[AGENTS[j].id]?.predicted_price;
                 if (p1 && p2) {
                     const key = `${AGENTS[i].name} vs ${AGENTS[j].name}`;
-                    details[key] = Math.abs(p1 - p2) / mean * 100;
+                    const diff = Math.abs(p1 - p2) / mean * 100;
+                    details[key] = isFinite(diff) ? diff : 0;
                 }
             }
         }
 
-        return { score: cvPct, stdDev, mean, details };
+        return { 
+            score: isFinite(cvPct) ? cvPct : 0, 
+            stdDev, 
+            mean, 
+            details,
+            isPerfectConsensus: stdDev === 0 
+        };
     }
 
     // ── Get Confidence Bands ────────────────────────────────────────
