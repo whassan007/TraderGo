@@ -126,7 +126,9 @@ const MarketData = (() => {
         TIMEFRAMES.forEach(tf => {
             const count = tf === 1 ? 300 : tf === 5 ? 200 : tf === 15 ? 100 : 50;
             const intervalSec = tf * 60;
-            const startTime = nowUnix - count * intervalSec;
+            const OFFSET = 1800; // 30-min align for 1H/4H
+            const binnedNow = Math.floor((nowUnix - OFFSET) / intervalSec) * intervalSec + OFFSET;
+            const startTime = binnedNow - count * intervalSec;
             const candles = [];
 
             for (let i = 0; i < count; i++) {
@@ -287,7 +289,9 @@ const MarketData = (() => {
     function _updateCandles(ticker, time, price, vol) {
         TIMEFRAMES.forEach(tf => {
             const intervalSec = tf * 60;
-            const candleTime = Math.floor(time / intervalSec) * intervalSec;
+            // Apply 30-minute offset to anchor 1H/4H candles to 9:30 instead of top of the hour
+            const OFFSET = 1800; 
+            const candleTime = Math.floor((time - OFFSET) / intervalSec) * intervalSec + OFFSET;
             let candle = currentCandles[ticker][tf];
 
             if (!candle || candle.time !== candleTime) {
