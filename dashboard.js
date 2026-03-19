@@ -66,6 +66,7 @@
         wireExpiryToggles();
         wireHeaderActions();
         wireBacktestModal();
+        wirePortfolioHedgeModal();
 
         // Live mode (Finnhub) — opt-in if a key is present
         initLiveMarketIfConfigured();

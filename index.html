@@ -56,6 +56,10 @@
                     <button class="mode-btn" id="mode-backtest" data-mode="backtest">🔙 BACKTEST</button>
                 </div>
                 <span class="sep">|</span>
+                <button class="system-qa-btn" id="portfolio-hedge-btn" style="background: rgba(16,185,129,0.1); border-color: rgba(16,185,129,0.3); color: #34d399; margin-left: 4px;">
+                    <span class="bt-icon">🛡️</span> PORTFOLIO HEDGE
+                </button>
+                <span class="sep">|</span>
                 <button id="clear-cache-btn" class="header-btn" title="Force Clear App Cache & Reload" style="background:transparent; border:none; color:#a1a1aa; cursor:pointer; font-size:14px; padding:0 4px; transition:color 0.2s;">🧹</button>
                 <span class="sep">|</span>
                 <span class="infra-tag">🖥️ GKE / Qlib+Vertex / FinMem-TGI</span>
@@ -320,6 +324,7 @@
     <script src="recommendation-engine.js?v=2"></script>
     <script src="qa-engine.js?v=1"></script>
     <script src="chart-engine.js"></script>
+    <script src="portfolio-hedge.js?v=1"></script>
     <script src="dashboard.js?v=2"></script>
 
     <!-- Backtest Modal Overlay -->
@@ -403,6 +408,62 @@
                 <div class="bt-actions">
                     <button class="bt-action-btn" id="bt-export-btn">📥 EXPORT JSON</button>
                     <button class="bt-action-btn secondary" id="bt-reset-btn">↻ NEW TEST</button>
+                </div>
+            </div>
+        </div>
+    </div>
+    <!-- Portfolio Hedge Modal -->
+    <div id="ph-modal" class="bt-modal-overlay" style="display:none; z-index: 10001;">
+        <div class="bt-modal" style="max-width: 700px;">
+            <div class="bt-modal-header">
+                <div class="bt-modal-title">
+                    <span class="bt-icon">🛡️</span> PORTFOLIO HEDGE
+                </div>
+                <button class="bt-modal-close" id="ph-modal-close">✕</button>
+            </div>
+            
+            <div class="bt-config" id="ph-config" style="display:block;">
+                <div style="font-size: 13px; color: var(--text-dim); margin-bottom: 24px; line-height: 1.5;">
+                    Simulates a defensive buy-and-hold portfolio to offset heavy tech drawdowns during market crashes.<br><br>
+                    <strong>Tech Allocation (80%):</strong> NVDA, MSFT, ASML<br>
+                    <strong>Inverse Hedge (20%):</strong> SH (Short S&P), PSQ (Short QQQ), TAIL (Tail Risk ETF)
+                </div>
+                
+                <div class="bt-config-section">
+                    <div class="bt-config-label">SELECT CRASH SCENARIO</div>
+                    <div class="bt-day-picker" id="ph-year-picker">
+                        <button class="bt-day-btn active" data-year="2020" style="flex:1;">🦠 2020 COVID-19 Crash</button>
+                        <button class="bt-day-btn" data-year="2022" style="flex:1;">📉 2022 Bear Market</button>
+                    </div>
+                </div>
+                
+                <button class="bt-run-btn" id="ph-run-btn" style="margin-top: 16px;">
+                    <span class="bt-run-icon">▶</span> RUN SIMULATION
+                </button>
+            </div>
+
+            <div class="bt-progress" id="ph-progress" style="display:none; padding: 48px;">
+                <div class="bt-progress-label">Downloading constituent historical data… <span id="ph-progress-pct">0%</span></div>
+                <div class="bt-progress-track">
+                    <div class="bt-progress-fill" id="ph-progress-fill"></div>
+                </div>
+            </div>
+
+            <div class="bt-results" id="ph-results" style="display:none; padding-bottom: 12px;">
+                <div class="bt-result-header" style="margin-bottom: 24px;">
+                    <span class="bt-result-algo" id="ph-result-title">Portfolio Hedge — 2022</span>
+                </div>
+                
+                <!-- Metrics -->
+                <div class="bt-metrics-container" id="ph-metrics-container" style="display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin-bottom: 24px;">
+                    <!-- Inserted via JS -->
+                </div>
+
+                <!-- Equity Chart -->
+                <div style="width:100%; height:300px; background:var(--bg-dark); border:1px solid var(--border); border-radius:6px; margin-bottom:12px; position:relative; overflow:hidden;" id="ph-equity-chart"></div>
+                
+                <div style="display: flex; gap: 12px; margin-top:20px;">
+                    <button class="bt-run-btn" id="ph-reset-btn" style="background:var(--bg-light); color:var(--text); border:1px solid var(--border);">← NEW SIMULATION</button>
                 </div>
             </div>
         </div>
